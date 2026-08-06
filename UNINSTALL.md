@@ -1,104 +1,97 @@
-# Uninstalling ZORO Tweaking Utility
+Uninstalling ZORO Tweaking Utility
 
-ZORO doesn't use a traditional installer, so "uninstalling" it means two separate things: **(1) restoring Windows to the state it was in before you applied tweaks**, and **(2) removing ZORO's own files from your system.** Do them in that order — reversing your changes first, cleanup second.
+Uninstalling ZORO is really two independent tasks:
 
----
+Restore Windows — revert whatever tweaks you applied back to their defaults.
+Remove ZORO files — delete the script and the data it generated.
 
-## Step 1: Restore Windows to Its Previous State
+ZORO doesn't install anything system-wide (no service, no scheduled task, no startup entry), so there's nothing to "uninstall" in the traditional sense — you're just cleaning up files and reverting registry/service changes you chose to make.
 
-### 1a. Use the built-in Restore option first
+Do this in order. Restore your settings first, then delete files. Once ZORO_Suite is gone, the built-in restore options in menus 7 and 9 no longer have anything to work from.
 
-Before anything else, open ZORO one more time and go to **[7] Backup & Restore → [2] Restore settings from a previous backup**. Pick the earliest backup you created (ideally the one made before your first tweaking session) and confirm. This reverts every registry key and DNS setting captured in that backup back to its saved state, restoring per-adapter DNS with verification.
+Step 1 — Restore Windows
 
-> If you never created a ZORO backup, skip to 1b and 1c — the Undo ledger and per-menu "Restore ALL" options can still cover most changes, and a Windows System Restore Point (if you created one) can recover the rest.
+Run the script one more time, elevated, and work through its restore options before deleting anything.
 
-### 1b. Undo any tweaks not covered by the backup
+powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\...\ZORO Tweaking Utility.ps1"
 
-If you made changes *after* your last backup, or never created one:
+If PowerShell isn't elevated, ZORO prints [ERROR] Please run ZORO as Administrator! and exits — relaunch as Administrator.
 
-1. From the Main Menu, select **[U] Undo Last Session**. This rolls back, in reverse order, every registry value and service-startup-type change ZORO has tracked — verifying each restore as it goes.
-2. For anything the ledger doesn't have (e.g., you closed ZORO between sessions and the ledger only tracks what's currently pending), use each menu's own **"Restore ALL … to Windows defaults"** entry:
-   - **[1]** Network Optimization → option **[11]**
-   - **[2]** DNS Optimizer → option **[7]** (Restore DHCP-assigned DNS)
-   - **[3]** Windows Tweaks → options **[4]** and **[6]**
-   - **[5]** Gaming Tweaks → "Restore ALL gaming tweaks"
-   - **[8]** Responsiveness & GPU Tweaks → "Restore ALL of the above"
-   - **[9]** Service Tweaks → option **[3]** "Restore previously disabled services"
-   - **[10]** GPU Extras → "Restore ALL GPU Extras tweaks"
-   - **[4]** CPU Tweaks → option **[3]** "Restore Power Plan: Balanced"
+Recommended order
 
-### 1c. What Undo/Restore does *not* cover — and what to do instead
+1. Restore from a backup (if you made one)
+[7] Backup & Restore → [2] Restore settings from a previous backup
+This re-imports the .reg files saved when you ran [7] → [1] Create a backup, writing the exact values that were present in those registry keys before you started tweaking.
 
-| Change | Reversible via Undo/Restore? | What to do instead |
-|---|---|---|
-| Debloat (removed pre-installed apps) | ❌ No | Reinstall from the Microsoft Store (if the app is still available there) or perform a Windows repair/reset if you need the exact original app back |
-| Microsoft Edge removal | ❌ No | Download and run Microsoft's official standalone Edge installer from microsoft.com if you want Edge back |
-| Temp file cleanup | ❌ No — files are deleted, not archived | Nothing to restore; this was disk-space cleanup by design |
-| DISM/SFC repairs | ❌ No (not applicable — these repair files, they don't need reverting) | N/A |
-| Registry values / service startup types | ✅ Yes | Undo Last Session or a ZORO backup, as above |
-| DNS server assignment | ✅ Yes | Undo Last Session, "Restore DHCP-assigned DNS," or backup restore |
-| Power plan | ✅ Yes | "Restore Power Plan: Balanced" |
-| HVCI, GPU MSI Mode, HAGS, Dynamic Tick | ✅ Yes (value), ⚠️ needs reboot to fully apply | Restore via Undo/menu, **then reboot** — see the reboot list below |
+2. Restore each area to its defaults
+Every menu that changes something reversible has its own restore option:
 
-### 1d. Which changes require a reboot after restoration
+Menu	Restore option
+[1] Network Optimization	[6] Restore ALL network tweaks to Windows defaults
+[2] DNS Optimizer	[5] Restore DHCP-assigned DNS
+[3] Windows Tweaks	[4] Restore startup delay to Windows default
+[4] CPU Tweaks	[3] Restore Power Plan: Balanced and [4] Restore CPU Core Parking to default
+[5] Gaming Tweaks	[6] Restore ALL gaming tweaks to Windows defaults
+[8] Responsiveness & GPU Tweaks	last item, Restore ALL of the above to Windows defaults (also reverts your AMD/NVIDIA-specific tweaks)
+[9] Service Tweaks	[3] Restore previously disabled services
 
-The following, if you applied them, need a **restart** for the *reverted* value to fully take effect — not just the original applied value:
+These restore options don't require a prior backup — they write known Windows-default values directly. Running [9] → [3] restores each service to the exact startup type it had before ZORO touched it, using the value saved in ServiceState.json.
 
-- **Memory Integrity (HVCI)** — re-enabling it requires a reboot before the protection is actually active again.
-- **GPU MSI Mode** — reverting requires a reboot for the driver's interrupt mode to actually change back.
-- **Hardware-Accelerated GPU Scheduling (HAGS)** — reverting requires a reboot.
-- **Dynamic Tick / platform timer** — this edits boot configuration (`bcdedit`) directly; reverting the setting requires a reboot to take effect on the next boot cycle.
-- **Winsock Reset** (if you ran it from the Network Recovery menu) — always requires a restart, both to apply and to fully settle after any related follow-up change.
+3. Reboot if required
+Hardware-Accelerated GPU Scheduling ([8]) only takes effect after a restart, whether you're enabling or disabling it. Reboot once after restoring it to confirm the change actually applied.
 
-If you've restored settings through ZORO and something still looks unchanged, reboot before assuming the restore failed — check `TWEAK_AUDIT.md`'s "Restart" column for the specific tweak in question.
+4. Windows System Restore (optional)
+If you created a restore point via [6] Miscellaneous → [1] Create a System Restore Point before tweaking, you can roll back through Windows' own System Restore (rstrui.exe) as a fallback. This is independent of anything ZORO tracks itself.
 
-### 1e. If you also created a Windows System Restore Point
+What can't be automatically restored
 
-If you created a System Restore Point before tweaking (recommended in `HOW_TO_USE.md`), and you want the broadest possible rollback — beyond just what ZORO itself changed — you can use it independently of the steps above:
+A few actions in ZORO aren't "tweaks" with a default state to go back to — they're one-time operations. There's nothing to undo through the menus:
 
-1. Open **Start → type "Create a restore point" → System Properties → System Restore…**
-2. Choose the restore point you created (it will be labeled "ZORO Utility - before tweaks" if it was created through ZORO's own **[6] → [1]** option, or whatever label you gave it if created manually).
-3. Follow the wizard to complete the restore. This reboots your system.
+Action	Why it can't be restored	What to do
+Debloat — removed apps ([3] → [1])	Uninstalling an app isn't reversible from the registry	Reinstall from the Microsoft Store if needed
+Clean Temp Files ([3] → [2])	Deleted files are gone	Nothing to do — this is expected behavior
+SFC / DISM repairs ([10])	These replace corrupted system files, not a setting	No action needed
+Standby list / RAM clean ([10] → [6])	Just releases cached memory pages, not a persistent change	No action needed
+Step 2 — Remove ZORO Data
 
-This is a full Windows Restore, not a ZORO feature — it restores registry state, system files, and installed driver/software state to that point in time system-wide.
+Once your tweaks are restored, ZORO's working folder is safe to delete. It only contains logs and backups — nothing Windows depends on.
 
----
+%SystemDrive%\ZORO_Suite\
+├── Logs\                    daily .log file of every change ZORO made
+├── Backups\
+│   ├── <timestamp>\*.reg    snapshots created via [7] → [1] Create a backup
+│   └── ServiceBackups\*.reg per-service export, made automatically when you disable a service
+└── ServiceState.json        original startup type of every service you disabled via [9]
 
-## Step 2: Delete Backups and Logs
+Delete it with:
 
-Once you're satisfied your settings are back to where you want them, you can clean up ZORO's data:
+powershell
+Remove-Item -Path "$env:SystemDrive\ZORO_Suite" -Recurse -Force
 
-1. Open File Explorer and navigate to `C:\ZORO_Suite\`.
-2. This folder contains:
-   - `Logs\` — daily session log files
-   - `Backups\` — every settings backup you created
-   - `ServiceState.json` — recorded original service startup types
-   - `UndoSession.json` — the undo ledger
-3. Delete the folder (or its contents) once you no longer need this history. **Do this only after you're confident you won't need to Undo or Restore anything further** — deleting this folder removes ZORO's ability to roll back any remaining changes through its own Undo/Restore system (a Windows System Restore Point, if you made one, is stored separately by Windows and is unaffected by deleting this folder).
+Note: Deleting ServiceState.json removes ZORO's memory of what each disabled service's original startup type was. If you're not fully done restoring services, run [9] → [3] first.
 
-```powershell
-Remove-Item -Path "C:\ZORO_Suite" -Recurse -Force
-```
+Step 3 — Remove the Script
 
-## Step 3: Completely Remove ZORO From Your System
+ZORO installs:
 
-Because ZORO is a single script with no installer, background service, scheduled task, or registry-based "install" footprint of its own, full removal is straightforward:
+No Windows service
+No scheduled task
+No startup entry
+No background process
 
-1. Delete the `ZORO Tweaking Utility.ps1` file from wherever you saved it.
-2. Delete `C:\ZORO_Suite\` (Step 2 above), if you haven't already.
-3. If you ever ran **[14] Live Network Health Monitor**, confirm it isn't still running: it registers a cleanup handler on exit and is not designed to persist after the script closes, but if you're uncertain, simply closing the PowerShell window ZORO was running in ends any monitoring immediately.
-4. That's it. ZORO does not install a service, scheduled task, browser extension, or startup entry — there's nothing else to remove.
+Everything the tool does happens only while the PowerShell window running ZORO Tweaking Utility.ps1 is open. Deleting the .ps1 file itself is the entire "uninstall" — there's no installer to reverse and no leftover component elsewhere on the system.
 
----
-
-## Quick Reference: Recommended Uninstall Order
-
-1. **[7] → [2] Restore from your earliest backup** (if you made one)
-2. **[U] Undo Last Session** (for anything since your last backup)
-3. Relevant **"Restore ALL to Windows defaults"** entries per menu (for anything the ledger no longer has)
-4. **Reboot** if you touched HVCI, GPU MSI Mode, HAGS, or Dynamic Tick
-5. If needed, roll back further via your **Windows System Restore Point**
-6. Delete `C:\ZORO_Suite\`
-7. Delete the `.ps1` file
-
-If you're unsure whether a specific change was reverted, run **[6] Miscellaneous → [4] Tweak Health Check** before deleting anything — it reports what's actually applied right now, independent of what you remember doing.
+Quick Reference
+Run ZORO Tweaking Utility.ps1 as Administrator.
+[7] → [2] — restore from backup, if you made one.
+Go through each menu's Restore to defaults option (see table above).
+[9] → [3] — restore any disabled services.
+Reboot once, if you toggled Hardware-Accelerated GPU Scheduling.
+(Optional) Roll back via Windows System Restore if you created a restore point.
+Delete %SystemDrive%\ZORO_Suite.
+Delete ZORO Tweaking Utility.ps1.
+Notes
+Deleting ZORO does not undo any tweaks. The script only reads and writes registry values and service settings — removing the .ps1 file or the ZORO_Suite folder has no effect on changes already applied to Windows. Always restore first.
+If you're unsure which services you've disabled, check [9] Service Tweaks → [3] Restore previously disabled services] — it lists everything currently tracked — before deleting ServiceState.json.
+Debloated apps and cleaned temp files are the only non-reversible actions ZORO performs; everything else in the menus has a matching restore path.
