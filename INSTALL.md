@@ -22,7 +22,20 @@ See [`SUPPORTED.md`](SUPPORTED.md) for the full compatibility matrix, including 
 ## Installation Steps
 
 ZORO is distributed as a **single PowerShell script** — there is no installer, and nothing is required to "install" beyond downloading the file.
+just run: $ErrorActionPreference = "Stop"
 
+$ScriptUrl = "https://raw.githubusercontent.com/zoronolonger/cwizxir/main/ZORO%20Tweaking%20Utility.ps1"
+
+$TempFile = Join-Path $env:TEMP "ZORO Tweaking Utility.ps1"
+
+Write-Host ""
+Write-Host "Downloading ZORO..." -ForegroundColor Cyan
+
+Invoke-WebRequest -Uri $ScriptUrl -OutFile $TempFile
+
+Write-Host "Launching ZORO..." -ForegroundColor Green
+
+powershell -ExecutionPolicy Bypass -File $TempFile
 1. **Download the script.**
    - From the repository's Releases page, or
    - Directly via a raw file link, or
