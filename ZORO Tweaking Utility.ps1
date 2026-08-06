@@ -12,6 +12,49 @@
 #  marketing number. Full reasoning for every rating lives in TWEAK_AUDIT.md.
 #
 #  Condensed changelog (full history: CHANGELOG.md):
+#  - v3.12.0: new Advanced Storage Optimization menu [18] - TRIM
+#    (DisableDeleteNotify) gated to Get-SystemStorageProfile.IsSsd, NTFS
+#    Last-Access Timestamp toggle, Scheduled Drive Optimization ("Optimize
+#    Drives" task) repair, and Storage Sense enable/disable via its
+#    documented StoragePolicy registry value. No manual "defrag now" for
+#    SSDs (TRIM is the correct mechanism, not defrag) and no unrelated
+#    "SSD tweak pack" registry keys - every item maps to one verifiable
+#    mechanism, reusing Get-SystemStorageProfile rather than a second
+#    disk-type probe.
+#  - v3.11.0: new Advanced Memory Optimization menu [17] - MMAgent memory
+#    compression toggle (PS5.1-native, PS7+ via Import-Module -UseWindowsPowerShell
+#    fallback through new Test-MMAgentAvailable) with a new MemoryCompression
+#    undo-record type (same precedent as InterfaceMtu/DnsServers for
+#    non-registry-shaped changes); Page File "System Managed" repair via the
+#    documented PagingFiles registry convention (new Set-RegMultiStringVerified
+#    helper, REG_MULTI_SZ counterpart to Set-RegDword/Set-RegStringVerified);
+#    read-only Memory Diagnostics (RAM/commit charge/compression/page file/top
+#    processes); Windows Memory Diagnostic (mdsched.exe) launcher. SysMain/
+#    Superfetch intentionally not duplicated - it already lives in Service
+#    Tweaks [9] with a live disk-type-based recommendation. No "disable
+#    pagefile" or LargeSystemCache option - both obsolete/harmful advice.
+#  - v3.10.0: new Process Scheduler Optimization menu [16] - real,
+#    Microsoft-documented thread/process scheduler and MMCSS (Multimedia
+#    Class Scheduler Service) tuning: Processor Scheduling mode (the exact
+#    Win32PrioritySeparation values System Properties > Performance Options
+#    > Advanced writes - 38 "Programs" / 2 "Background services"), MMCSS
+#    Low-Latency Mode (SystemResponsiveness 20->0), MMCSS Network
+#    Throttling disable (NetworkThrottlingIndex -> -1 / 0xFFFFFFFF, stored
+#    as signed DWord to avoid the UInt32-overflow trap), a defensive
+#    "Games" MMCSS task repair (Test-GamesTaskProfileHealthy / rated 3/10 -
+#    restores Windows' own shipped values, doesn't uplift a stock system,
+#    exists to undo what other "optimizer" tools commonly break), and an
+#    MMCSS-service health repair (Automatic+Running, since every value
+#    above is inert if the service isn't). All six route through the
+#    existing Invoke-ValidatedTweak/Invoke-DetectedTweak lifecycle
+#    (Requirements/Apply/Verify/Rollback, PASS/FAIL, Undo-ledger backed) -
+#    no new undo-record type needed. New Set-RegStringVerified helper
+#    (REG_SZ counterpart to Set-RegDword, same snapshot/undo/verify
+#    discipline) added next to Set-RegDword for the Games-task string
+#    values. No core-parking override added - see the existing hybrid-
+#    topology reasoning above Get-CpuTopologyInfo, which still applies.
+#    Surfaced in Tweak Health Check and System Requirements Check
+#    alongside every other module instead of as a silent bolt-on.
 #  - v3.9.0: Release-hardening pass (no menu/behavior changes) - centralized
 #    error handling (Get-ZoroErrorCategory/Invoke-ZoroSafeOperation classify
 #    every network/registry failure into RegistryLocked/AccessDenied/
@@ -100,7 +143,7 @@
 # ==============================================================================
  
 # ---------- 0. CONFIG ----------
-$ScriptVersion = "3.9.0"
+$ScriptVersion = "3.12.0"
 $DiscordName   = "cwizxir"
 $DiscordInvite = ""   # put your invite link here (e.g. "https://discord.gg/xxxxx") to auto-open on [D]
 $GitHubUrl     = "https://github.com/zoronolonger"
@@ -317,6 +360,16 @@ function Invoke-UndoRecord ($Rec) {
                     }
                 } catch { $ok = $false }
             }
+            "MemoryCompression" {
+                # Advanced Memory Optimization: MMAgent memory compression
+                # isn't registry-shaped (Enable-MMAgent/Disable-MMAgent),
+                # so like InterfaceMtu/DnsServers it gets its own restore path.
+                try {
+                    if ($Rec.PreviousEnabled) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop }
+                    $nowEnabled = [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression
+                    $ok = ($nowEnabled -eq $Rec.PreviousEnabled)
+                } catch { $ok = $false }
+            }
             default { $ok = $false }
         }
     } finally {
@@ -419,6 +472,52 @@ function Set-RegDword ($Path, $Name, $Value) {
             return $false
         }
         Write-Log "SET $Path\$Name = $Value (verified)"
+        return $true
+    } catch {
+        Write-Log "FAILED to set $Path\$Name : $_" "ERROR"
+        return $false
+    }
+}
+
+function Set-RegStringVerified ($Path, $Name, $Value) {
+    <# REG_SZ counterpart to Set-RegDword above - same snapshot-before-write,
+       read-back-after-write discipline, for the handful of tweaks (MMCSS
+       "Games" task: Scheduling Category / SFIO Priority / Background Only)
+       whose values are strings, not DWORDs. Shares Get-RegUndoSnapshot and
+       Add-UndoRecord with Set-RegDword rather than duplicating either. #>
+    try {
+        $snap = Get-RegUndoSnapshot $Path $Name
+        Add-UndoRecord @{ Type = "Registry"; Path = $Path; Name = $Name; HadValue = $snap.HadValue; PreviousValue = $snap.PreviousValue; PreviousKind = $snap.PreviousKind }
+        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+        New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Value -Force | Out-Null
+        $readBack = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name
+        if ("$readBack" -ne "$Value") {
+            Write-Log "VERIFY-FAILED $Path\$Name = $Value (read back: $readBack)" "ERROR"
+            return $false
+        }
+        Write-Log "SET $Path\$Name = $Value (verified)"
+        return $true
+    } catch {
+        Write-Log "FAILED to set $Path\$Name : $_" "ERROR"
+        return $false
+    }
+}
+
+function Set-RegMultiStringVerified ($Path, $Name, [string[]]$Value) {
+    <# REG_MULTI_SZ counterpart to Set-RegDword/Set-RegStringVerified - same
+       snapshot/undo/verify discipline, for the PagingFiles value (Memory
+       Optimization) and any future multi-string tweak. #>
+    try {
+        $snap = Get-RegUndoSnapshot $Path $Name
+        Add-UndoRecord @{ Type = "Registry"; Path = $Path; Name = $Name; HadValue = $snap.HadValue; PreviousValue = $snap.PreviousValue; PreviousKind = $snap.PreviousKind }
+        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+        New-ItemProperty -Path $Path -Name $Name -PropertyType MultiString -Value $Value -Force | Out-Null
+        $readBack = @((Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name)
+        if (($readBack -join "|") -ne ($Value -join "|")) {
+            Write-Log "VERIFY-FAILED $Path\$Name = $($Value -join ';') (read back: $($readBack -join ';'))" "ERROR"
+            return $false
+        }
+        Write-Log "SET $Path\$Name = $($Value -join ';') (verified)"
         return $true
     } catch {
         Write-Log "FAILED to set $Path\$Name : $_" "ERROR"
@@ -3393,6 +3492,18 @@ function Show-TweakHealthCheck {
         [PSCustomObject]@{ Tweak = "TdrDdiDelay (RT/frame-gen)"; State = (Get-TdrDdiDelayState) }
         [PSCustomObject]@{ Tweak = "Background Apps (global)"; State = (Test-RegValueEquals "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled" 1) }
         [PSCustomObject]@{ Tweak = "Active power plan"; State = ((powercfg /getactivescheme 2>$null) -join " ") }
+        [PSCustomObject]@{ Tweak = "Processor Scheduling mode"; State = (Get-ProcessSchedulerState).PrioritySeparationMode }
+        [PSCustomObject]@{ Tweak = "MMCSS System Responsiveness"; State = (Get-ProcessSchedulerState).SystemResponsiveness }
+        [PSCustomObject]@{ Tweak = "'Games' task priority profile"; State = $(if (Test-GamesTaskProfileHealthy) { "Healthy" } elseif ((Get-ProcessSchedulerState).GamesTaskExists) { "Degraded" } else { "Not present" }) }
+        [PSCustomObject]@{ Tweak = "Memory Compression"; State = $(switch (Get-MemoryCompressionState) { $true { "Enabled (default)" } $false { "Disabled" } default { "Not available" } }) }
+        [PSCustomObject]@{ Tweak = "Page File management"; State = $(if (Test-PageFileIsSystemManaged) { "System Managed" } else { "Manually configured" }) }
+        [PSCustomObject]@{ Tweak = "TRIM (SSD/NVMe)"; State = $(if (-not (Get-SystemStorageProfile).IsSsd) { "N/A (no SSD detected)" } else { switch ((Get-StorageOptimizationState).TrimEnabled) { $true {"Enabled"} $false {"Disabled"} default {"Unknown"} } }) }
+        [PSCustomObject]@{ Tweak = "Scheduled Drive Optimization"; State = $(switch ((Get-StorageOptimizationState).ScheduledOptEnabled) { $true {"Enabled"} $false {"Disabled"} default {"Unknown"} }) }
+        [PSCustomObject]@{ Tweak = "Diagnostic Data Level"; State = $(switch ((Get-PrivacyOptimizationState).AllowTelemetry) { 0 {"Security"} 1 {"Basic"} 2 {"Enhanced"} 3 {"Full (default)"} default {"Default (not set)"} }) }
+        [PSCustomObject]@{ Tweak = "Advertising ID"; State = $(if ((Get-PrivacyOptimizationState).AdvertisingIdEnabled) { "Enabled (default)" } else { "Disabled" }) }
+        [PSCustomObject]@{ Tweak = "Activity History / Timeline"; State = $(if ((Get-PrivacyOptimizationState).ActivityHistoryDisabled) { "Disabled" } else { "Enabled (default)" }) }
+        [PSCustomObject]@{ Tweak = "Tailored Experiences"; State = $(if ((Get-PrivacyOptimizationState).TailoredExperiencesDisabled) { "Disabled" } else { "Enabled (default)" }) }
+        [PSCustomObject]@{ Tweak = "Start Menu Web Search"; State = $(if ((Get-PrivacyOptimizationState).StartMenuWebSearchEnabled) { "Enabled (default)" } else { "Disabled" }) }
     )
     $rows | Format-Table -AutoSize | Out-String | Write-Host
 
@@ -3426,6 +3537,12 @@ function Show-SystemRequirementsCheck {
         @{ Name = "PnpDevice cmdlets available - required for GPU MSI Mode";          Test = { Test-CommandExists "Get-PnpDevice" } }
         @{ Name = "Get-PhysicalDisk available - required for SysMain recommendation"; Test = { Test-CommandExists "Get-PhysicalDisk" } }
         @{ Name = "DiagTrack service present";                                        Test = { Test-ServiceExists "DiagTrack" } }
+        @{ Name = "MMCSS service present - required for Process Scheduler tweaks";    Test = { Test-ServiceExists "MMCSS" } }
+        @{ Name = "MMAgent cmdlets available (native or PS7 compat) - Memory Compression"; Test = { Test-MMAgentAvailable } }
+        @{ Name = "fsutil available - required for TRIM/Last-Access tweaks";          Test = { Test-CommandExists "fsutil" } }
+        @{ Name = "ScheduledTask cmdlets available - Drive Optimization repair";      Test = { Test-CommandExists "Get-ScheduledTask" } }
+        @{ Name = "SSD/NVMe detected (Get-SystemStorageProfile) - required for TRIM"; Test = { (Get-SystemStorageProfile).IsSsd } }
+        @{ Name = "DataCollection policy key reachable - Diagnostic Data Level";       Test = { $true } }
         @{ Name = "AMD GPU detected";                                                 Test = { Test-GpuVendorIs "AMD" } }
         @{ Name = "NVIDIA GPU detected";                                              Test = { Test-GpuVendorIs "NVIDIA" } }
         @{ Name = "GPU is a modern generation (per TWEAK_AUDIT.md tiering)";          Test = { Test-GpuTierIs "MODERN" } }
@@ -3514,7 +3631,16 @@ $BackupRegTargets = @(
     @{ Path = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Power\PowerThrottling";        File = "PowerThrottling.reg" },
     @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"; File = "HVCI.reg" },
     @{ Path = "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications"; File = "BackgroundApps.reg" },
-    @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers";               File = "GraphicsDrivers_TdrDdiDelay.reg" }
+    @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers";               File = "GraphicsDrivers_TdrDdiDelay.reg" },
+    @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl";               File = "PriorityControl.reg" },
+    @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"; File = "MemoryManagement.reg" },
+    @{ Path = "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"; File = "StorageSense.reg" },
+    @{ Path = "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection";             File = "PrivacyDataCollection.reg" },
+    @{ Path = "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo";      File = "PrivacyAdvertisingInfo.reg" },
+    @{ Path = "HKLM\SOFTWARE\Policies\Microsoft\Windows\System";                     File = "PrivacyActivityFeedPolicy.reg" },
+    @{ Path = "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent";               File = "PrivacyCloudContentPolicy.reg" },
+    @{ Path = "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; File = "PrivacyContentDeliveryManager.reg" },
+    @{ Path = "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search";               File = "PrivacyExplorerSearch.reg" }
 )
 # Note: GraphicsDrivers.reg (above, from the [8] section) and this
 # GraphicsDrivers_TdrDdiDelay.reg entry both export the SAME key
@@ -5672,6 +5798,909 @@ function Show-GameNetworkDiagnosticsMenu {
 }
 
 # ==============================================================================
+#  17a. PROCESS SCHEDULER OPTIMIZATION
+#  Real, Microsoft-documented Windows thread/process scheduler and MMCSS
+#  (Multimedia Class Scheduler Service) tuning - the same registry surface
+#  System Properties > Performance Options > Advanced ("Programs" vs
+#  "Background services") and Windows' own "Games" task registration use
+#  internally. Deliberately does NOT add a core-parking override: see the
+#  hybrid-topology reasoning above Get-CpuTopologyInfo (9. CPU TWEAKS) -
+#  Windows 11's scheduler already places threads using per-core hints on
+#  modern hybrid/preferred-core parts, and forcing every core permanently
+#  unparked fights that instead of helping it. That reasoning isn't
+#  repeated per-tweak below; it's still exactly why it's absent here too.
+# ==============================================================================
+$script:RegPath_PriorityControl = "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl"
+$script:RegPath_MmcssProfile    = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+$script:RegPath_MmcssGamesTask  = "$script:RegPath_MmcssProfile\Tasks\Games"
+
+function Get-Win32PrioritySeparationMode ($Value) {
+    <# Maps the raw Win32PrioritySeparation DWORD to the label System
+       Properties > Performance Options > Advanced would show for it.
+       That UI only ever writes 2 ("Background services") or 38
+       ("Programs"); anything else reflects a hand-edit or another tool. #>
+    if ($null -eq $Value) { return "Programs (Windows default - key not present)" }
+    switch ([int]$Value) {
+        2       { return "Background services (long, fixed quanta)" }
+        38      { return "Programs (short, variable quanta, foreground boost)" }
+        default { return "Custom (raw value: $Value)" }
+    }
+}
+
+function Get-ProcessSchedulerState {
+    <# One cached read of every value this module touches, so the menu,
+       diagnostics screen, and Tweak Health Check all read the same
+       snapshot instead of three independent registry/service hits. #>
+    return Get-ZoroCachedValue -Key "ProcessSchedulerState" -TtlMs 1500 -Loader {
+        $prioritySep = $null
+        try { $prioritySep = (Get-ItemProperty -Path $script:RegPath_PriorityControl -Name "Win32PrioritySeparation" -ErrorAction Stop).Win32PrioritySeparation } catch {}
+
+        $sysResponsiveness = $null
+        try { $sysResponsiveness = (Get-ItemProperty -Path $script:RegPath_MmcssProfile -Name "SystemResponsiveness" -ErrorAction Stop).SystemResponsiveness } catch {}
+
+        $netThrottle = $null
+        try { $netThrottle = (Get-ItemProperty -Path $script:RegPath_MmcssProfile -Name "NetworkThrottlingIndex" -ErrorAction Stop).NetworkThrottlingIndex } catch {}
+
+        $gamesTaskExists = Test-Path $script:RegPath_MmcssGamesTask
+        $gamesTask = $null
+        if ($gamesTaskExists) { try { $gamesTask = Get-ItemProperty -Path $script:RegPath_MmcssGamesTask -ErrorAction Stop } catch {} }
+
+        $mmcss = Get-Service -Name "MMCSS" -ErrorAction SilentlyContinue
+
+        [PSCustomObject]@{
+            PrioritySeparationRaw          = $prioritySep
+            PrioritySeparationMode         = Get-Win32PrioritySeparationMode $prioritySep
+            SystemResponsiveness           = if ($null -ne $sysResponsiveness) { $sysResponsiveness } else { 20 }
+            SystemResponsivenessIsDefault  = ($null -eq $sysResponsiveness -or $sysResponsiveness -eq 20)
+            NetworkThrottlingIndex         = if ($null -ne $netThrottle) { $netThrottle } else { 10 }
+            NetworkThrottlingDisabled      = ($netThrottle -eq -1)
+            GamesTaskExists                = $gamesTaskExists
+            GamesTaskGpuPriority           = if ($gamesTask) { $gamesTask.'GPU Priority' } else { $null }
+            GamesTaskPriority              = if ($gamesTask) { $gamesTask.Priority } else { $null }
+            GamesTaskScheduling            = if ($gamesTask) { $gamesTask.'Scheduling Category' } else { $null }
+            GamesTaskSfio                  = if ($gamesTask) { $gamesTask.'SFIO Priority' } else { $null }
+            GamesTaskBackgroundOnly        = if ($gamesTask) { $gamesTask.'Background Only' } else { $null }
+            MmcssServicePresent            = [bool]$mmcss
+            MmcssServiceRunning            = [bool]($mmcss -and $mmcss.Status -eq "Running")
+            MmcssStartType                 = if ($mmcss) { $mmcss.StartType.ToString() } else { $null }
+        }
+    }
+}
+
+function Test-GamesTaskProfileHealthy {
+    <# True only if every field Windows ships by default for the "Games"
+       MMCSS task is still at its shipped value - i.e. nothing (this tool
+       or another one) has degraded it. Gates the repair tweak as
+       AlreadyOk instead of re-writing values that are already correct. #>
+    $s = Get-ProcessSchedulerState
+    if (-not $s.GamesTaskExists) { return $false }
+    return (
+        "$($s.GamesTaskGpuPriority)"    -eq "8"     -and
+        "$($s.GamesTaskPriority)"       -eq "6"     -and
+        "$($s.GamesTaskScheduling)"     -eq "High"  -and
+        "$($s.GamesTaskSfio)"           -eq "High"  -and
+        "$($s.GamesTaskBackgroundOnly)" -eq "False"
+    )
+}
+
+function Test-MmcssServiceHealthy {
+    $s = Get-ProcessSchedulerState
+    return ($s.MmcssServicePresent -and $s.MmcssServiceRunning -and $s.MmcssStartType -eq "Automatic")
+}
+
+function Set-ProcessorSchedulingMode ([string]$Mode) {
+    <# Exactly what System Properties > Performance Options > Advanced >
+       "Adjust for best performance of" writes - only ever 2 or 38, the
+       same two values the Windows UI itself is willing to set. #>
+    $target = if ($Mode -eq "Programs") { 38 } else { 2 }
+    return Invoke-ValidatedTweak -Name "Processor Scheduling: $Mode" `
+        -Requirements @(
+            @{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }
+            @{ Name = "PriorityControl key reachable";                    Test = { Test-Path $script:RegPath_PriorityControl } }
+        ) `
+        -Apply    { Set-RegDword $script:RegPath_PriorityControl "Win32PrioritySeparation" $target } `
+        -Verify   { ((Get-ItemProperty -Path $script:RegPath_PriorityControl -Name "Win32PrioritySeparation" -ErrorAction Stop).Win32PrioritySeparation) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_PriorityControl "Win32PrioritySeparation" }
+}
+
+function Set-MmcssSystemResponsiveness ([bool]$LowLatency) {
+    <# SystemResponsiveness is the percentage of CPU MMCSS guarantees to
+       non-multimedia ("normal") tasks even while a registered multimedia
+       task (Games/Audio/Pro Audio) is running. 20 is the Windows default;
+       0 is the same value Windows' own low-latency audio/game guidance
+       uses, at the cost of that headroom coming from somewhere else under
+       sustained CPU pressure - hence the honest 4/10, not a blanket win. #>
+    $target = if ($LowLatency) { 0 } else { 20 }
+    $label  = if ($LowLatency) { "Low-latency (0)" } else { "Windows default (20)" }
+    return Invoke-ValidatedTweak -Name "MMCSS System Responsiveness: $label" `
+        -Requirements @(
+            @{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }
+            @{ Name = "Multimedia SystemProfile key reachable";           Test = { Test-Path $script:RegPath_MmcssProfile } }
+        ) `
+        -Apply    { Set-RegDword $script:RegPath_MmcssProfile "SystemResponsiveness" $target } `
+        -Verify   { ((Get-ItemProperty -Path $script:RegPath_MmcssProfile -Name "SystemResponsiveness" -ErrorAction Stop).SystemResponsiveness) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_MmcssProfile "SystemResponsiveness" }
+}
+
+function Set-MmcssNetworkThrottling ([bool]$Disable) {
+    <# NetworkThrottlingIndex caps NDIS packet processing (Windows default:
+       10 packets/ms) so multimedia tasks aren't starved by network I/O.
+       Disabling it is stored as -1 (not 4294967295) because New-ItemProperty
+       -PropertyType DWord stores a signed Int32 - passing the unsigned
+       0xFFFFFFFF literal throws an overflow error; -1 is the correct
+       two's-complement representation and reads back identically to what
+       regedit shows as 0xffffffff. Genuinely measurable only on systems
+       doing heavy simultaneous network + audio/game-task work - rated
+       accordingly, not oversold. #>
+    $target = if ($Disable) { -1 } else { 10 }
+    $label  = if ($Disable) { "Disabled (0xFFFFFFFF)" } else { "Windows default (10)" }
+    return Invoke-ValidatedTweak -Name "MMCSS Network Throttling: $label" `
+        -Requirements @(
+            @{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }
+            @{ Name = "Multimedia SystemProfile key reachable";           Test = { Test-Path $script:RegPath_MmcssProfile } }
+        ) `
+        -Apply    { Set-RegDword $script:RegPath_MmcssProfile "NetworkThrottlingIndex" $target } `
+        -Verify   { ((Get-ItemProperty -Path $script:RegPath_MmcssProfile -Name "NetworkThrottlingIndex" -ErrorAction Stop).NetworkThrottlingIndex) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_MmcssProfile "NetworkThrottlingIndex" }
+}
+
+function Repair-MmcssGamesTaskProfile {
+    <# Defensive repair, not an uplift: restores the "Games" MMCSS task to
+       Windows' own shipped defaults (GPU Priority 8, Priority 6,
+       Scheduling Category/SFIO Priority "High", Background Only "False").
+       Real value here is undoing whatever a *different* "optimizer" tool
+       set it to - Low scheduling category, GPU Priority 1, and
+       Background Only=True are common placebo-adjacent edits from other
+       tools. It does not make a stock, untouched system faster than it
+       already is - rated 3/10 and documented as such, not sold as an
+       uplift it isn't. #>
+    return Invoke-DetectedTweak -Name "Repair 'Games' Task Priority Profile" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { Test-GamesTaskProfileHealthy } `
+        -Apply {
+            if (-not (Test-Path $script:RegPath_MmcssGamesTask)) { New-Item -Path $script:RegPath_MmcssGamesTask -Force | Out-Null }
+            $r1 = Set-RegDword          $script:RegPath_MmcssGamesTask "GPU Priority"          8
+            $r2 = Set-RegDword          $script:RegPath_MmcssGamesTask "Priority"              6
+            $r3 = Set-RegStringVerified $script:RegPath_MmcssGamesTask "Scheduling Category"    "High"
+            $r4 = Set-RegStringVerified $script:RegPath_MmcssGamesTask "SFIO Priority"          "High"
+            $r5 = Set-RegStringVerified $script:RegPath_MmcssGamesTask "Background Only"        "False"
+            ($r1 -and $r2 -and $r3 -and $r4 -and $r5)
+        } `
+        -Verify { Test-GamesTaskProfileHealthy }
+}
+
+function Repair-MmcssService {
+    <# MMCSS is the service that actually enforces every value above -
+       SystemResponsiveness, NetworkThrottlingIndex, and the Games task
+       profile are all inert if this service isn't running. Ensures
+       Automatic + Running; nothing else. #>
+    return Invoke-DetectedTweak -Name "Repair Multimedia Class Scheduler Service (MMCSS)" `
+        -Requirements @(@{ Name = "MMCSS service present"; Test = { Test-ServiceExists "MMCSS" } }) `
+        -Supported { Test-ServiceExists "MMCSS" } `
+        -AlreadyOk { Test-MmcssServiceHealthy } `
+        -Apply    { (Set-ServiceStartupVerified -Name "MMCSS" -StartupType "Automatic").Verified } `
+        -Verify   { Test-MmcssServiceHealthy }
+}
+
+function Restore-AllSchedulerTweaks {
+    <# Registry-shaped tweaks (Processor Scheduling, SystemResponsiveness,
+       NetworkThrottlingIndex) reset to "key absent = Windows default" the
+       same way every other Restore-All* in this tool works. The Games-task
+       repair and MMCSS-service repair aren't included here because both
+       only ever restore Windows' own shipped values - there's no prior
+       "tweaked" state of this tool's own to revert past that. #>
+    Remove-RegValue $script:RegPath_PriorityControl "Win32PrioritySeparation" | Out-Null
+    Remove-RegValue $script:RegPath_MmcssProfile    "SystemResponsiveness"    | Out-Null
+    Remove-RegValue $script:RegPath_MmcssProfile    "NetworkThrottlingIndex"  | Out-Null
+    Write-Host "[DONE] Process Scheduler tweaks restored to Windows defaults." -ForegroundColor Green
+    Write-Log "Process Scheduler tweaks restored to defaults"
+}
+
+function Show-ProcessSchedulerDiagnostics {
+    $s = Get-ProcessSchedulerState
+    Write-Host "`n  Processor scheduling mode   : $($s.PrioritySeparationMode)"
+    Write-Host ("  MMCSS SystemResponsiveness  : {0}{1}" -f $s.SystemResponsiveness, $(if ($s.SystemResponsivenessIsDefault) { " (Windows default)" } else { " (low-latency mode)" }))
+    Write-Host ("  MMCSS NetworkThrottlingIndex: {0}{1}" -f $s.NetworkThrottlingIndex, $(if ($s.NetworkThrottlingDisabled) { " (0xFFFFFFFF - throttling disabled)" } else { " (Windows default)" }))
+    if ($s.GamesTaskExists) {
+        $healthy = Test-GamesTaskProfileHealthy
+        $detail  = if ($healthy) { "Healthy (matches Windows' shipped defaults)" } else { "Degraded - GPU Priority=$($s.GamesTaskGpuPriority) Priority=$($s.GamesTaskPriority) Scheduling=$($s.GamesTaskScheduling) SFIO=$($s.GamesTaskSfio) BackgroundOnly=$($s.GamesTaskBackgroundOnly)" }
+        Write-Host ("  'Games' task profile        : {0}" -f $detail) -ForegroundColor $(if ($healthy) { "Green" } else { "Yellow" })
+    } else {
+        Write-Host "  'Games' task profile        : Not present on this system" -ForegroundColor DarkGray
+    }
+    $mmcssOk = Test-MmcssServiceHealthy
+    $mmcssDetail = if ($s.MmcssServicePresent) { "$($s.MmcssStartType), $(if ($s.MmcssServiceRunning) { 'Running' } else { 'Not running' })" } else { "Not present" }
+    Write-Host ("  MMCSS service                : {0}" -f $mmcssDetail) -ForegroundColor $(if ($mmcssOk) { "Green" } else { "Yellow" })
+    Write-Log "Process Scheduler diagnostics viewed"
+}
+
+function Show-ProcessSchedulerMenu {
+    while ($true) {
+        Show-Banner | Out-Null
+        Write-Host "`n>>> [16] PROCESS SCHEDULER OPTIMIZATION`n" -ForegroundColor Green
+        Write-Host " Real, Microsoft-documented thread/process scheduler and MMCSS tuning -" -ForegroundColor Gray
+        Write-Host " the same surface System Properties > Performance Options > Advanced and" -ForegroundColor Gray
+        Write-Host " Windows' own 'Games' task registration use internally." -ForegroundColor Gray
+        Write-Host " No core-parking override here - see CPU Tweaks [4] diagnostics for why.`n" -ForegroundColor Gray
+
+        $s = Get-ProcessSchedulerState
+        Write-Host (" Current mode: {0}" -f $s.PrioritySeparationMode) -ForegroundColor DarkGray
+
+        $items = @(
+            @{ Text = "Processor Scheduling: Programs (foreground boost, Windows client default)   [3/10]"
+               Action = { Write-TweakResult (Set-ProcessorSchedulingMode "Programs") } }
+            @{ Text = "Processor Scheduling: Background services (even quanta, server-style)       [3/10 background/render/streaming rigs, 1/10 gaming]"
+               Action = { Write-TweakResult (Set-ProcessorSchedulingMode "Background") } }
+            @{ Text = "MMCSS Low-Latency Mode (SystemResponsiveness 20 -> 0)                        [4/10, audio/input-latency workloads]"
+               Action = { Write-TweakResult (Set-MmcssSystemResponsiveness $true) } }
+            @{ Text = "Restore MMCSS System Responsiveness to Windows default (20)"
+               Action = { Write-TweakResult (Set-MmcssSystemResponsiveness $false) } }
+            @{ Text = "MMCSS Network Throttling: Disable (NetworkThrottlingIndex -> 0xFFFFFFFF)     [3/10, only matters under heavy simultaneous net+MM load]"
+               Action = { Write-TweakResult (Set-MmcssNetworkThrottling $true) } }
+            @{ Text = "Restore MMCSS Network Throttling to Windows default (10)"
+               Action = { Write-TweakResult (Set-MmcssNetworkThrottling $false) } }
+            @{ Text = "Repair 'Games' Task Priority Profile (undoes other tools' placebo edits)     [3/10, defensive only - see note]"
+               Action = { Write-TweakResult (Repair-MmcssGamesTaskProfile) } }
+            @{ Text = "Repair MMCSS Service (ensure Automatic + Running)                             [required for everything above to matter]"
+               Action = { Write-TweakResult (Repair-MmcssService) } }
+            @{ Text = "Process Scheduler Diagnostics (read current state)"
+               Action = { Show-ProcessSchedulerDiagnostics } }
+            @{ Text = "Restore ALL Process Scheduler tweaks to Windows defaults"
+               Action = { if (Confirm-Action "Revert all Process Scheduler tweaks to Windows defaults?") { Restore-AllSchedulerTweaks } } }
+        )
+
+        Write-Host ""
+        $num = 0; $indexMap = @{}
+        foreach ($it in $items) {
+            $num++
+            $indexMap[$num] = $it
+            Write-Host (" [{0}] {1}" -f $num, $it.Text)
+        }
+        Write-Host " [0] Back to Main Menu"
+        $c = Read-Host "`nSelect"
+        if ($c -eq "0") { return }
+        if ($c -match '^\d+$' -and $indexMap.ContainsKey([int]$c)) {
+            & $indexMap[[int]$c].Action
+            Wait-ForEnter
+        } else {
+            Show-InvalidSelection
+        }
+    }
+}
+
+# ==============================================================================
+#  17b. ADVANCED MEMORY OPTIMIZATION
+#  Real, Microsoft-documented memory-manager tuning: MMAgent memory
+#  compression (Get/Enable/Disable-MMAgent) and page-file configuration via
+#  the same PagingFiles registry convention System Properties > Advanced >
+#  Performance > Virtual Memory writes. SysMain/Superfetch is deliberately
+#  NOT duplicated here - it already lives in Service Tweaks [9] with a
+#  live disk-type/RAM-based recommendation (Get-SystemStorageProfile);
+#  this module's diagnostics page links to it instead of re-implementing
+#  the same toggle a second time. No "disable pagefile" or "LargeSystemCache"
+#  option either - both are obsolete/harmful-by-default advice this tool
+#  won't offer regardless of how common they are in older guides.
+# ==============================================================================
+$script:RegPath_MemoryManagement = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+
+function Test-MMAgentAvailable {
+    <# Get-MMAgent/Enable-MMAgent/Disable-MMAgent ship as a Windows
+       PowerShell 5.1 binary module and aren't natively present in
+       PowerShell 7+. On PS7 this attempts the standard Windows-PowerShell
+       compatibility import before giving up, so the tweak reports
+       Skipped (Not Supported) only when the cmdlets are genuinely
+       unavailable, not just because ZORO happens to be running under
+       pwsh.exe instead of powershell.exe. #>
+    if (Test-CommandExists "Get-MMAgent") { return $true }
+    if ($script:PSMajor -ge 6) {
+        try { Import-Module MMAgent -UseWindowsPowerShell -ErrorAction Stop | Out-Null } catch { return $false }
+        return (Test-CommandExists "Get-MMAgent")
+    }
+    return $false
+}
+
+function Get-MemoryCompressionState {
+    if (-not (Test-MMAgentAvailable)) { return $null }
+    try { return [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } catch { return $null }
+}
+
+function Test-PageFileIsSystemManaged {
+    <# Reads the PagingFiles REG_MULTI_SZ value directly rather than the
+       Win32_ComputerSystem.AutomaticManagedPagefile WMI flag, since the
+       registry value is what this tool actually writes/undoes - checking
+       the same surface it controls instead of a second, only-loosely-
+       coupled representation of the same setting. Per Microsoft's
+       documented format ("<drive>:\pagefile.sys <initial-MB> <max-MB>"),
+       trailing "0 0" means system-managed; a real min/max pair means a
+       manual size is configured. Key/value absent is also treated as
+       system-managed - that's what a clean install looks like before any
+       tool (including this one) has ever touched it. #>
+    try {
+        $v = @((Get-ItemProperty -Path $script:RegPath_MemoryManagement -Name "PagingFiles" -ErrorAction Stop).PagingFiles)
+        if (-not $v -or $v.Count -eq 0) { return $true }
+        return (($v -join " ") -match '\s0\s+0\s*$')
+    } catch { return $true }
+}
+
+function Get-MemoryOptimizationState {
+    <# One cached read of everything this module touches, feeding the
+       menu header, diagnostics screen, and Tweak Health Check alike. #>
+    return Get-ZoroCachedValue -Key "MemoryOptimizationState" -TtlMs 1500 -Loader {
+        $os = $null
+        try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop } catch {}
+        $usage = $null
+        try { $usage = Get-CimInstance Win32_PageFileUsage -ErrorAction Stop | Select-Object -First 1 } catch {}
+        [PSCustomObject]@{
+            TotalRamMB          = if ($os) { [math]::Round($os.TotalVisibleMemorySize / 1KB) } else { $null }
+            FreeRamMB           = if ($os) { [math]::Round($os.FreePhysicalMemory / 1KB) } else { $null }
+            CommitLimitMB       = if ($os) { [math]::Round($os.TotalVirtualMemorySize / 1KB) } else { $null }
+            CommitUsedMB        = if ($os) { [math]::Round(($os.TotalVirtualMemorySize - $os.FreeVirtualMemory) / 1KB) } else { $null }
+            MemoryCompressionOn = Get-MemoryCompressionState
+            PageFileSystemManaged = Test-PageFileIsSystemManaged
+            PageFileAllocatedMB = if ($usage) { $usage.AllocatedBaseSize } else { $null }
+            PageFileCurrentMB   = if ($usage) { $usage.CurrentUsage } else { $null }
+        }
+    }
+}
+
+function Set-MemoryCompressionMode ([bool]$Enable) {
+    <# Windows default is enabled. Disabling trades RAM headroom for CPU
+       cycles otherwise spent compressing/decompressing standby pages -
+       occasionally worth it on abundant-RAM systems running latency-
+       sensitive real-time workloads, a wash or a regression on everything
+       else. Rated for what it actually is, not sold as a universal win. #>
+    $label = if ($Enable) { "Enabled (Windows default)" } else { "Disabled" }
+    return Invoke-DetectedTweak -Name "Memory Compression: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { Test-MMAgentAvailable } `
+        -AlreadyOk { (Get-MemoryCompressionState) -eq $Enable } `
+        -Apply {
+            $prev = Get-MemoryCompressionState
+            Add-UndoRecord @{ Type = "MemoryCompression"; PreviousEnabled = $prev }
+            if ($Enable) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop }
+            Clear-ZoroCache -KeyPrefix "MemoryOptimizationState"
+            $true
+        } `
+        -Verify { (Get-MemoryCompressionState) -eq $Enable }
+}
+
+function Repair-PageFileSystemManaged {
+    <# Defensive repair, same spirit as the Games-task repair in Process
+       Scheduler: restores "Automatically manage paging file size for all
+       drives" - the Windows-recommended default - rather than trying to
+       hand-pick a fixed size, which stale guides still push and which
+       stops adapting the moment your workload or installed RAM changes. #>
+    $sysDrive = $env:SystemDrive
+    $target = @("$sysDrive\pagefile.sys 0 0")
+    return Invoke-DetectedTweak -Name "Repair Page File: System Managed (Windows recommended default)" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { Test-PageFileIsSystemManaged } `
+        -Apply { Set-RegMultiStringVerified $script:RegPath_MemoryManagement "PagingFiles" $target } `
+        -Verify { Test-PageFileIsSystemManaged }
+}
+
+function Restore-AllMemoryTweaks {
+    if (Test-MMAgentAvailable -and (Get-MemoryCompressionState) -eq $false) { Set-MemoryCompressionMode $true | Out-Null }
+    Repair-PageFileSystemManaged | Out-Null
+    Write-Host "[DONE] Memory tweaks restored to Windows defaults." -ForegroundColor Green
+    Write-Log "Memory Optimization tweaks restored to defaults"
+}
+
+function Show-MemoryDiagnostics {
+    $s = Get-MemoryOptimizationState
+    Write-Host "`n  Total RAM               : $([math]::Round($s.TotalRamMB / 1024, 1)) GB"
+    Write-Host "  Free RAM                : $([math]::Round($s.FreeRamMB / 1024, 1)) GB"
+    if ($s.CommitLimitMB -and $s.CommitUsedMB) {
+        $pct = [math]::Round(($s.CommitUsedMB / $s.CommitLimitMB) * 100, 1)
+        Write-Host ("  Commit charge           : {0} GB / {1} GB ({2}%)" -f [math]::Round($s.CommitUsedMB/1024,1), [math]::Round($s.CommitLimitMB/1024,1), $pct)
+    }
+    $mc = $s.MemoryCompressionOn
+    Write-Host ("  Memory Compression      : {0}" -f $(if ($null -eq $mc) { "Not available (MMAgent cmdlets missing)" } elseif ($mc) { "Enabled (Windows default)" } else { "Disabled" })) -ForegroundColor $(if ($mc -eq $false) { "Yellow" } else { "Green" })
+    Write-Host ("  Page file management    : {0}" -f $(if ($s.PageFileSystemManaged) { "System Managed (Windows recommended)" } else { "Manually configured" })) -ForegroundColor $(if ($s.PageFileSystemManaged) { "Green" } else { "Yellow" })
+    if ($s.PageFileAllocatedMB) { Write-Host ("  Page file size           : {0} MB allocated, {1} MB in use" -f $s.PageFileAllocatedMB, $s.PageFileCurrentMB) }
+    Write-Host "`n  Top 5 processes by working set:" -ForegroundColor Cyan
+    Get-Process -ErrorAction SilentlyContinue | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 |
+        ForEach-Object { Write-Host ("    {0,-28} {1,8:N0} MB" -f $_.ProcessName, [math]::Round($_.WorkingSet64 / 1MB)) }
+    Write-Host "`n  SysMain/Superfetch: see Service Tweaks [9] for the live disk-type-based" -ForegroundColor DarkGray
+    Write-Host "  recommendation - not duplicated here." -ForegroundColor DarkGray
+    Write-Log "Memory diagnostics viewed"
+}
+
+function Show-MemoryOptimizationMenu {
+    while ($true) {
+        Show-Banner | Out-Null
+        Write-Host "`n>>> [17] ADVANCED MEMORY OPTIMIZATION`n" -ForegroundColor Green
+        Write-Host " Real MMAgent memory-compression and page-file tuning - the same surface" -ForegroundColor Gray
+        Write-Host " Task Manager's Memory tab and System Properties > Virtual Memory use." -ForegroundColor Gray
+        Write-Host " No 'disable pagefile' option - that's not Windows-recommended and this" -ForegroundColor Gray
+        Write-Host " tool doesn't ship advice it wouldn't stand behind.`n" -ForegroundColor Gray
+
+        $items = @(
+            @{ Text = "Disable Memory Compression                                                    [3/10, abundant-RAM + real-time workloads only]"
+               Action = { Write-TweakResult (Set-MemoryCompressionMode $false) } }
+            @{ Text = "Restore Memory Compression to Windows default (Enabled)"
+               Action = { Write-TweakResult (Set-MemoryCompressionMode $true) } }
+            @{ Text = "Repair Page File: System Managed (Windows recommended default)               [3/10, defensive - see note]"
+               Action = { Write-TweakResult (Repair-PageFileSystemManaged) } }
+            @{ Text = "Memory Diagnostics (RAM/commit/compression/page file, read-only)"
+               Action = { Show-MemoryDiagnostics } }
+            @{ Text = "Run Windows Memory Diagnostic (schedules a RAM test at next restart)"
+               Action = {
+                   if (Confirm-Action "This restarts Windows immediately after you confirm the built-in Memory Diagnostic tool, to run a hardware RAM test. Continue?") {
+                       try { Start-Process "mdsched.exe" -ErrorAction Stop; Write-Host "[DONE] Windows Memory Diagnostic launched." -ForegroundColor Green }
+                       catch { Write-Host "[FAILED] Could not launch mdsched.exe: $_" -ForegroundColor Red }
+                   }
+               } }
+            @{ Text = "Restore ALL Memory Optimization tweaks to Windows defaults"
+               Action = { if (Confirm-Action "Revert all Memory Optimization tweaks to Windows defaults?") { Restore-AllMemoryTweaks } } }
+        )
+
+        Write-Host ""
+        $num = 0; $indexMap = @{}
+        foreach ($it in $items) {
+            $num++
+            $indexMap[$num] = $it
+            Write-Host (" [{0}] {1}" -f $num, $it.Text)
+        }
+        Write-Host " [0] Back to Main Menu"
+        $c = Read-Host "`nSelect"
+        if ($c -eq "0") { return }
+        if ($c -match '^\d+$' -and $indexMap.ContainsKey([int]$c)) {
+            & $indexMap[[int]$c].Action
+            Wait-ForEnter
+        } else {
+            Show-InvalidSelection
+        }
+    }
+}
+
+# ==============================================================================
+#  17c. ADVANCED STORAGE OPTIMIZATION
+#  Real, Microsoft-documented storage tuning gated on the same
+#  Get-SystemStorageProfile disk-type detection SysMain (Service Tweaks [9])
+#  already uses - never guessed, never applied blind to an HDD or an SSD.
+#  TRIM (DisableDeleteNotify) and the defrag/optimize schedule are the
+#  actual mechanism behind "Optimize Drives"; NTFS last-access-timestamp
+#  writes are a real, if small, per-file-access cost with no benefit on a
+#  client machine. No manual "defrag now" button for SSDs (TRIM, not
+#  defrag, is what an SSD needs) and no registry "SSD tweak pack" of
+#  unrelated placebo keys - each item here maps to one specific, verifiable
+#  mechanism.
+# ==============================================================================
+function Get-StorageOptimizationState {
+    <# One cached read of everything this module touches. TRIM/last-access
+       are registry+fsutil reads (cheap); the defrag schedule shells out to
+       schtasks, so this is cached like every other multi-source snapshot
+       in the tool rather than re-shelling on every menu redraw. #>
+    return Get-ZoroCachedValue -Key "StorageOptimizationState" -TtlMs 1500 -Loader {
+        $profile = Get-SystemStorageProfile
+
+        $trimDisabled = $null
+        try {
+            $out = fsutil behavior query DisableDeleteNotify 2>$null
+            if ($out -match ':\s*(\d)\s*$' -or $out -match '=\s*(\d)') { $trimDisabled = [int]$Matches[1] }
+        } catch {}
+        # DisableDeleteNotify: 0 = TRIM enabled (Windows default on SSD), 1 = disabled.
+
+        $lastAccessDisabled = $null
+        try {
+            $out = fsutil behavior query DisableLastAccess 2>$null
+            if ($out -match ':\s*(\d)\s*$' -or $out -match '=\s*(\d)') { $lastAccessDisabled = [int]$Matches[1] }
+        } catch {}
+
+        $scheduledOptEnabled = $null
+        try {
+            $task = Get-ScheduledTask -TaskName "ScheduledDefrag" -TaskPath "\Microsoft\Windows\Defrag\" -ErrorAction Stop
+            $scheduledOptEnabled = ($task.State -ne "Disabled")
+        } catch {}
+
+        $storageSenseEnabled = $null
+        try {
+            $v = (Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy" -Name "01" -ErrorAction Stop).'01'
+            $storageSenseEnabled = ($v -eq 1)
+        } catch {}
+
+        [PSCustomObject]@{
+            StorageProfile        = $profile
+            TrimEnabled            = if ($null -ne $trimDisabled) { ($trimDisabled -eq 0) } else { $null }
+            LastAccessDisabled     = $lastAccessDisabled
+            ScheduledOptEnabled    = $scheduledOptEnabled
+            StorageSenseEnabled    = $storageSenseEnabled
+        }
+    }
+}
+
+function Set-TrimMode ([bool]$Enable) {
+    <# TRIM (DisableDeleteNotify=0) is what actually keeps an SSD/NVMe fast
+       over time by letting the controller reclaim freed blocks ahead of
+       write time - defragmenting an SSD does nothing for this and adds
+       needless write-cycle wear, which is why there's no "defrag now"
+       button in this module. Gated to systems Get-SystemStorageProfile
+       actually detected as solid-state; on an unknown/HDD profile this is
+       Skipped rather than guessed. #>
+    $target = if ($Enable) { 0 } else { 1 }
+    $label  = if ($Enable) { "Enabled (SSD/NVMe recommended)" } else { "Disabled" }
+    return Invoke-DetectedTweak -Name "TRIM (DisableDeleteNotify): $label" `
+        -Requirements @(
+            @{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }
+            @{ Name = "SSD or NVMe detected (Get-SystemStorageProfile)";  Test = { (Get-SystemStorageProfile).IsSsd } }
+        ) `
+        -Supported { Test-CommandExists "fsutil" } `
+        -AlreadyOk { (Get-StorageOptimizationState).TrimEnabled -eq $Enable } `
+        -Apply {
+            fsutil behavior set DisableDeleteNotify $target 2>$null | Out-Null
+            Clear-ZoroCache -KeyPrefix "StorageOptimizationState"
+            $LASTEXITCODE -eq 0
+        } `
+        -Verify { (Get-StorageOptimizationState).TrimEnabled -eq $Enable }
+}
+
+function Set-LastAccessTimestamps ([bool]$Disable) {
+    <# NtfsDisableLastAccess: every file read otherwise triggers a metadata
+       write to record the access time, a real (if small) per-access cost
+       with no user-facing benefit on a client machine - a handful of
+       backup/sync/AV tools do read it, so this is opt-in, not a default. #>
+    $target = if ($Disable) { 1 } else { 0 }
+    $label  = if ($Disable) { "Disabled" } else { "Enabled (Windows default)" }
+    return Invoke-DetectedTweak -Name "NTFS Last-Access Timestamps: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { Test-CommandExists "fsutil" } `
+        -AlreadyOk { (Get-StorageOptimizationState).LastAccessDisabled -eq $target } `
+        -Apply {
+            fsutil behavior set DisableLastAccess $target 2>$null | Out-Null
+            Clear-ZoroCache -KeyPrefix "StorageOptimizationState"
+            $LASTEXITCODE -eq 0
+        } `
+        -Verify { (Get-StorageOptimizationState).LastAccessDisabled -eq $target }
+}
+
+function Repair-ScheduledOptimization {
+    <# Ensures the built-in "ScheduledDefrag" task (what Settings > Storage
+       > Optimize Drives actually schedules - weekly TRIM on SSDs, weekly
+       defrag on HDDs, both disk-type-aware on their own) is enabled,
+       rather than reimplementing disk maintenance this tool would then be
+       responsible for scheduling and verifying itself. #>
+    return Invoke-DetectedTweak -Name "Repair Scheduled Drive Optimization (Windows' own weekly maintenance task)" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { Test-CommandExists "Get-ScheduledTask" } `
+        -AlreadyOk { (Get-StorageOptimizationState).ScheduledOptEnabled -eq $true } `
+        -Apply {
+            Enable-ScheduledTask -TaskName "ScheduledDefrag" -TaskPath "\Microsoft\Windows\Defrag\" -ErrorAction Stop | Out-Null
+            Clear-ZoroCache -KeyPrefix "StorageOptimizationState"
+            $true
+        } `
+        -Verify { (Get-StorageOptimizationState).ScheduledOptEnabled -eq $true }
+}
+
+function Set-StorageSenseMode ([bool]$Enable) {
+    <# Storage Sense (Settings > System > Storage) auto-cleans temp files
+       and the Recycle Bin on a schedule - the modern, Microsoft-supported
+       replacement for "run Disk Cleanup manually"/third-party junk
+       cleaners. Toggled via its own documented policy value, not by
+       reaching into whatever it happens to be cleaning today. #>
+    $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
+    $target = if ($Enable) { 1 } else { 0 }
+    $label  = if ($Enable) { "Enabled" } else { "Disabled" }
+    return Invoke-ValidatedTweak -Name "Storage Sense: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Apply    { Set-RegDword $path "01" $target } `
+        -Verify   { ((Get-ItemProperty -Path $path -Name "01" -ErrorAction Stop).'01') -eq $target } `
+        -Rollback { Remove-RegValue $path "01" }
+}
+
+function Restore-AllStorageTweaks {
+    $s = Get-StorageOptimizationState
+    if ($s.StorageProfile.IsSsd -and $s.TrimEnabled -eq $false) { Set-TrimMode $true | Out-Null }
+    if ($s.LastAccessDisabled -eq 1) { Set-LastAccessTimestamps $false | Out-Null }
+    Repair-ScheduledOptimization | Out-Null
+    Set-StorageSenseMode $true | Out-Null
+    Write-Host "[DONE] Storage tweaks restored to Windows defaults." -ForegroundColor Green
+    Write-Log "Storage Optimization tweaks restored to defaults"
+}
+
+function Show-StorageDiagnostics {
+    $s = Get-StorageOptimizationState
+    $p = $s.StorageProfile
+    Write-Host "`n  Detected disk           : $(if ($p.IsNvme) { 'NVMe SSD' } elseif ($p.IsSsd) { 'SATA/other SSD' } elseif ($p.DiskKnown) { 'Spinning HDD' } else { 'Unknown (detection unavailable)' })"
+    Write-Host ("  TRIM (DisableDeleteNotify): {0}" -f $(if ($null -eq $s.TrimEnabled) { "Unknown" } elseif ($s.TrimEnabled) { "Enabled" } else { "Disabled" })) -ForegroundColor $(if ($p.IsSsd -and $s.TrimEnabled -eq $false) { "Yellow" } else { "Green" })
+    Write-Host ("  NTFS Last-Access Timestamps: {0}" -f $(if ($s.LastAccessDisabled -eq 1) { "Disabled" } elseif ($s.LastAccessDisabled -eq 0) { "Enabled (Windows default)" } else { "Unknown" }))
+    Write-Host ("  Scheduled Drive Optimization: {0}" -f $(if ($null -eq $s.ScheduledOptEnabled) { "Unknown" } elseif ($s.ScheduledOptEnabled) { "Enabled" } else { "Disabled" })) -ForegroundColor $(if ($s.ScheduledOptEnabled -eq $false) { "Yellow" } else { "Green" })
+    Write-Host ("  Storage Sense            : {0}" -f $(if ($null -eq $s.StorageSenseEnabled) { "Unknown/not configured" } elseif ($s.StorageSenseEnabled) { "Enabled" } else { "Disabled" }))
+    if ($p.IsSsd) {
+        Write-Host "`n  No 'defrag now' option is offered - TRIM (above) is the SSD-relevant" -ForegroundColor DarkGray
+        Write-Host "  mechanism; defragmenting an SSD adds write-cycle wear for no read-speed" -ForegroundColor DarkGray
+        Write-Host "  benefit, which is why Windows' own Optimize Drives runs TRIM here too." -ForegroundColor DarkGray
+    }
+    Write-Log "Storage diagnostics viewed"
+}
+
+function Show-StorageOptimizationMenu {
+    while ($true) {
+        Show-Banner | Out-Null
+        $profile = (Get-SystemStorageProfile)
+        Write-Host "`n>>> [18] ADVANCED STORAGE OPTIMIZATION`n" -ForegroundColor Green
+        Write-Host (" Detected: {0}" -f $(if ($profile.IsNvme) { "NVMe SSD" } elseif ($profile.IsSsd) { "SATA/other SSD" } elseif ($profile.DiskKnown) { "Spinning HDD" } else { "Unknown" })) -ForegroundColor Gray
+        Write-Host " Real TRIM/defrag-schedule/NTFS-metadata tuning, gated to what your" -ForegroundColor Gray
+        Write-Host " actual disk type supports - nothing here is applied blind.`n" -ForegroundColor Gray
+
+        $items = @()
+        if ($profile.IsSsd) {
+            $items += @{ Text = "Enable TRIM (DisableDeleteNotify=0, SSD/NVMe recommended)                    [7/10 if currently off]"
+                         Action = { Write-TweakResult (Set-TrimMode $true) } }
+        } else {
+            $items += @{ IsHeader = $true; Text = "--- TRIM requires an SSD/NVMe (none detected - option hidden) ---" }
+        }
+        $items += @{ Text = "Disable NTFS Last-Access Timestamps                                           [3/10, tiny per-file-access saving]"
+                     Action = { Write-TweakResult (Set-LastAccessTimestamps $true) } }
+        $items += @{ Text = "Restore NTFS Last-Access Timestamps to Windows default (Enabled)"
+                     Action = { Write-TweakResult (Set-LastAccessTimestamps $false) } }
+        $items += @{ Text = "Repair Scheduled Drive Optimization (Windows' own weekly maintenance task)   [3/10, defensive - see note]"
+                     Action = { Write-TweakResult (Repair-ScheduledOptimization) } }
+        $items += @{ Text = "Enable Storage Sense (auto-clean temp files / Recycle Bin)                    [4/10]"
+                     Action = { Write-TweakResult (Set-StorageSenseMode $true) } }
+        $items += @{ Text = "Disable Storage Sense"
+                     Action = { Write-TweakResult (Set-StorageSenseMode $false) } }
+        $items += @{ Text = "Storage Diagnostics (TRIM/last-access/schedule/Storage Sense, read-only)"
+                     Action = { Show-StorageDiagnostics } }
+        $items += @{ Text = "Restore ALL Storage Optimization tweaks to Windows defaults"
+                     Action = { if (Confirm-Action "Revert all Storage Optimization tweaks to Windows defaults?") { Restore-AllStorageTweaks } } }
+
+        Write-Host ""
+        $num = 0; $indexMap = @{}
+        foreach ($it in $items) {
+            if ($it.IsHeader) { Write-Host ("`n {0}" -f $it.Text) -ForegroundColor DarkGray; continue }
+            $num++
+            $indexMap[$num] = $it
+            Write-Host (" [{0}] {1}" -f $num, $it.Text)
+        }
+        Write-Host " [0] Back to Main Menu"
+        $c = Read-Host "`nSelect"
+        if ($c -eq "0") { return }
+        if ($c -match '^\d+$' -and $indexMap.ContainsKey([int]$c)) {
+            & $indexMap[[int]$c].Action
+            Wait-ForEnter
+        } else {
+            Show-InvalidSelection
+        }
+    }
+}
+
+# ==============================================================================
+#  17d. SECURITY / PRIVACY / TELEMETRY OPTIMIZATION
+#  Real, Microsoft-documented diagnostic-data/advertising/activity-history/
+#  content-suggestion policy toggles - the same Group Policy / MDM surfaces
+#  Settings > Privacy & security exposes, applied via registry so they work
+#  identically on Home/Pro without gpedit. Per this tool's stated scope
+#  (see file header), this module NEVER touches Defender, UAC, Windows
+#  Update, or any other security control - DiagTrack/WerSvc service
+#  startup-type toggles already live in Service Tweaks [9] and are not
+#  duplicated here; this module is registry-policy-only. AllowTelemetry is
+#  set no lower than 1 (Basic/Required) - level 0 (Security) is an
+#  Enterprise/Education/Server-managed value this tool doesn't target.
+# ==============================================================================
+$script:RegPath_DataCollectionPolicy    = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
+$script:RegPath_AdvertisingInfo         = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+$script:RegPath_ActivityFeedPolicy      = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
+$script:RegPath_CloudContentPolicy      = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent"
+$script:RegPath_ContentDeliveryManager  = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+$script:RegPath_ExplorerSearch          = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+
+function Get-PrivacyOptimizationState {
+    <# One cached read of everything this module touches, feeding the menu
+       header, diagnostics screen, and Tweak Health Check alike - same
+       shared-snapshot pattern as Get-StorageOptimizationState/
+       Get-MemoryOptimizationState instead of a fourth copy of the idea. #>
+    return Get-ZoroCachedValue -Key "PrivacyOptimizationState" -TtlMs 1500 -Loader {
+        $allowTelemetry = $null
+        try { $allowTelemetry = (Get-ItemProperty -Path $script:RegPath_DataCollectionPolicy -Name "AllowTelemetry" -ErrorAction Stop).AllowTelemetry } catch { $allowTelemetry = $null }
+
+        $advertisingIdEnabled = $true
+        try { $advertisingIdEnabled = [bool](Get-ItemProperty -Path $script:RegPath_AdvertisingInfo -Name "Enabled" -ErrorAction Stop).Enabled } catch { $advertisingIdEnabled = $true }
+
+        $activityHistoryDisabled = $false
+        try {
+            $p = Get-ItemProperty -Path $script:RegPath_ActivityFeedPolicy -ErrorAction Stop
+            $activityHistoryDisabled = ($p.EnableActivityFeed -eq 0) -and ($p.PublishUserActivities -eq 0) -and ($p.UploadUserActivities -eq 0)
+        } catch { $activityHistoryDisabled = $false }
+
+        $tailoredExperiencesDisabled = $false
+        try { $tailoredExperiencesDisabled = [bool](Get-ItemProperty -Path $script:RegPath_CloudContentPolicy -Name "DisableTailoredExperiencesWithDiagnosticData" -ErrorAction Stop).DisableTailoredExperiencesWithDiagnosticData } catch { $tailoredExperiencesDisabled = $false }
+
+        $startMenuWebSearchEnabled = $true
+        try { $startMenuWebSearchEnabled = [bool](Get-ItemProperty -Path $script:RegPath_ExplorerSearch -Name "BingSearchEnabled" -ErrorAction Stop).BingSearchEnabled } catch { $startMenuWebSearchEnabled = $true }
+
+        [PSCustomObject]@{
+            AllowTelemetry               = $allowTelemetry
+            AdvertisingIdEnabled         = $advertisingIdEnabled
+            ActivityHistoryDisabled      = $activityHistoryDisabled
+            TailoredExperiencesDisabled  = $tailoredExperiencesDisabled
+            StartMenuWebSearchEnabled    = $startMenuWebSearchEnabled
+        }
+    }
+}
+
+function Set-DiagnosticDataLevel ([bool]$Reduce) {
+    <# Windows default on Home/Pro is 3 (Full/Optional). Reduce sets 1
+       (Basic/Required diagnostic data) - the documented floor for
+       non-managed editions; this tool never writes 0 (Security), which is
+       only honored on Enterprise/Education/Server under MDM/GPO management
+       and would silently no-op (or worse, misrepresent state) elsewhere. #>
+    $target = if ($Reduce) { 1 } else { 3 }
+    $label  = if ($Reduce) { "Basic (Required diagnostic data)" } else { "Full (Windows default)" }
+    return Invoke-DetectedTweak -Name "Diagnostic Data Level: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { (Get-PrivacyOptimizationState).AllowTelemetry -eq $target } `
+        -Apply { Set-RegDword $script:RegPath_DataCollectionPolicy "AllowTelemetry" $target } `
+        -Verify { ((Get-ItemProperty -Path $script:RegPath_DataCollectionPolicy -Name "AllowTelemetry" -ErrorAction Stop).AllowTelemetry) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_DataCollectionPolicy "AllowTelemetry" }
+}
+
+function Set-AdvertisingId ([bool]$Disable) {
+    <# Per-user "Let apps use advertising ID" toggle (Settings > Privacy &
+       security > General). Windows default is Enabled (1). #>
+    $target = if ($Disable) { 0 } else { 1 }
+    $label  = if ($Disable) { "Disabled" } else { "Enabled (Windows default)" }
+    return Invoke-DetectedTweak -Name "Advertising ID: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { (Get-PrivacyOptimizationState).AdvertisingIdEnabled -eq (-not $Disable) } `
+        -Apply { Set-RegDword $script:RegPath_AdvertisingInfo "Enabled" $target } `
+        -Verify { ((Get-ItemProperty -Path $script:RegPath_AdvertisingInfo -Name "Enabled" -ErrorAction Stop).Enabled) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_AdvertisingInfo "Enabled" }
+}
+
+function Set-ActivityHistory ([bool]$Disable) {
+    <# "Activity History" / Timeline publish+upload policy - three DWORDs
+       under the one documented policy key, written/verified/undone
+       together the same way Repair-MmcssGamesTaskProfile writes its three
+       related string values as one logical tweak instead of three menu
+       entries. Windows default is Enabled (no policy value present). #>
+    $target = if ($Disable) { 0 } else { 1 }
+    $label  = if ($Disable) { "Disabled" } else { "Enabled (Windows default)" }
+    return Invoke-DetectedTweak -Name "Activity History / Timeline: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { (Get-PrivacyOptimizationState).ActivityHistoryDisabled -eq $Disable } `
+        -Apply {
+            $r1 = Set-RegDword $script:RegPath_ActivityFeedPolicy "EnableActivityFeed" $target
+            $r2 = Set-RegDword $script:RegPath_ActivityFeedPolicy "PublishUserActivities" $target
+            $r3 = Set-RegDword $script:RegPath_ActivityFeedPolicy "UploadUserActivities" $target
+            $r1 -and $r2 -and $r3
+        } `
+        -Verify { (Get-PrivacyOptimizationState).ActivityHistoryDisabled -eq $Disable } `
+        -Rollback {
+            Remove-RegValue $script:RegPath_ActivityFeedPolicy "EnableActivityFeed" | Out-Null
+            Remove-RegValue $script:RegPath_ActivityFeedPolicy "PublishUserActivities" | Out-Null
+            Remove-RegValue $script:RegPath_ActivityFeedPolicy "UploadUserActivities" | Out-Null
+        }
+}
+
+function Set-TailoredExperiences ([bool]$Disable) {
+    <# "Tailored experiences" / personalized suggestions from diagnostic
+       data (Settings > Privacy & security > Diagnostics & feedback), plus
+       the matching Start-menu/lock-screen suggestion-content toggle
+       (ContentDeliveryManager) - the two documented surfaces for the same
+       user-facing setting. Windows default is Enabled on both. #>
+    $policyTarget = if ($Disable) { 1 } else { 0 }
+    $cdmTarget    = if ($Disable) { 0 } else { 1 }
+    $label = if ($Disable) { "Disabled" } else { "Enabled (Windows default)" }
+    return Invoke-DetectedTweak -Name "Tailored Experiences / Suggested Content: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { (Get-PrivacyOptimizationState).TailoredExperiencesDisabled -eq $Disable } `
+        -Apply {
+            $r1 = Set-RegDword $script:RegPath_CloudContentPolicy "DisableTailoredExperiencesWithDiagnosticData" $policyTarget
+            $r2 = Set-RegDword $script:RegPath_ContentDeliveryManager "SubscribedContent-338389Enabled" $cdmTarget
+            $r1
+        } `
+        -Verify { ((Get-ItemProperty -Path $script:RegPath_CloudContentPolicy -Name "DisableTailoredExperiencesWithDiagnosticData" -ErrorAction Stop).DisableTailoredExperiencesWithDiagnosticData) -eq $policyTarget } `
+        -Rollback {
+            Remove-RegValue $script:RegPath_CloudContentPolicy "DisableTailoredExperiencesWithDiagnosticData" | Out-Null
+            Remove-RegValue $script:RegPath_ContentDeliveryManager "SubscribedContent-338389Enabled" | Out-Null
+        }
+}
+
+function Set-StartMenuWebSearch ([bool]$Disable) {
+    <# "Search highlights" / Bing web-results toggle in Start-menu search
+       (Settings > Privacy & security > Search permissions, per-user).
+       Windows default is Enabled (1). #>
+    $target = if ($Disable) { 0 } else { 1 }
+    $label  = if ($Disable) { "Disabled" } else { "Enabled (Windows default)" }
+    return Invoke-DetectedTweak -Name "Start Menu Web Search: $label" `
+        -Requirements @(@{ Name = "Windows 10 22H2+ / Windows 11 (per script scope)"; Test = { Test-MinWindowsBuild 19041 } }) `
+        -Supported { $true } `
+        -AlreadyOk { (Get-PrivacyOptimizationState).StartMenuWebSearchEnabled -eq (-not $Disable) } `
+        -Apply { Set-RegDword $script:RegPath_ExplorerSearch "BingSearchEnabled" $target } `
+        -Verify { ((Get-ItemProperty -Path $script:RegPath_ExplorerSearch -Name "BingSearchEnabled" -ErrorAction Stop).BingSearchEnabled) -eq $target } `
+        -Rollback { Remove-RegValue $script:RegPath_ExplorerSearch "BingSearchEnabled" }
+}
+
+function Restore-AllPrivacyTweaks {
+    Remove-RegValue $script:RegPath_DataCollectionPolicy "AllowTelemetry" | Out-Null
+    Remove-RegValue $script:RegPath_AdvertisingInfo "Enabled" | Out-Null
+    Remove-RegValue $script:RegPath_ActivityFeedPolicy "EnableActivityFeed" | Out-Null
+    Remove-RegValue $script:RegPath_ActivityFeedPolicy "PublishUserActivities" | Out-Null
+    Remove-RegValue $script:RegPath_ActivityFeedPolicy "UploadUserActivities" | Out-Null
+    Remove-RegValue $script:RegPath_CloudContentPolicy "DisableTailoredExperiencesWithDiagnosticData" | Out-Null
+    Remove-RegValue $script:RegPath_ContentDeliveryManager "SubscribedContent-338389Enabled" | Out-Null
+    Remove-RegValue $script:RegPath_ExplorerSearch "BingSearchEnabled" | Out-Null
+    Clear-ZoroCache -KeyPrefix "PrivacyOptimizationState"
+    Write-Host "[DONE] Privacy/Telemetry tweaks restored to Windows defaults." -ForegroundColor Green
+    Write-Log "Security/Privacy/Telemetry Optimization tweaks restored to defaults"
+}
+
+function Show-PrivacyDiagnostics {
+    $s = Get-PrivacyOptimizationState
+    Write-Host ("`n  Diagnostic Data Level     : {0}" -f $(switch ($s.AllowTelemetry) { 0 {"Security (Enterprise-managed only)"} 1 {"Basic (Required)"} 2 {"Enhanced (deprecated)"} 3 {"Full (Windows default)"} default {"Not set (Windows default)"} }))
+    Write-Host ("  Advertising ID            : {0}" -f $(if ($s.AdvertisingIdEnabled) { "Enabled (Windows default)" } else { "Disabled" })) -ForegroundColor $(if ($s.AdvertisingIdEnabled) { "Yellow" } else { "Green" })
+    Write-Host ("  Activity History/Timeline : {0}" -f $(if ($s.ActivityHistoryDisabled) { "Disabled" } else { "Enabled (Windows default)" })) -ForegroundColor $(if ($s.ActivityHistoryDisabled) { "Green" } else { "Yellow" })
+    Write-Host ("  Tailored Experiences      : {0}" -f $(if ($s.TailoredExperiencesDisabled) { "Disabled" } else { "Enabled (Windows default)" })) -ForegroundColor $(if ($s.TailoredExperiencesDisabled) { "Green" } else { "Yellow" })
+    Write-Host ("  Start Menu Web Search     : {0}" -f $(if ($s.StartMenuWebSearchEnabled) { "Enabled (Windows default)" } else { "Disabled" })) -ForegroundColor $(if ($s.StartMenuWebSearchEnabled) { "Yellow" } else { "Green" })
+    Write-Host "`n  DiagTrack / Windows Error Reporting service startup: see Service Tweaks [9]" -ForegroundColor DarkGray
+    Write-Host "  for the live per-service toggle - not duplicated here." -ForegroundColor DarkGray
+    Write-Host "  This module never touches Defender, UAC, or Windows Update - see file header." -ForegroundColor DarkGray
+    Write-Log "Privacy diagnostics viewed"
+}
+
+function Show-PrivacyOptimizationMenu {
+    while ($true) {
+        Show-Banner | Out-Null
+        $s = Get-PrivacyOptimizationState
+        Write-Host "`n>>> [19] SECURITY / PRIVACY / TELEMETRY OPTIMIZATION`n" -ForegroundColor Green
+        Write-Host " Real, Microsoft-documented diagnostic-data/advertising/activity-history" -ForegroundColor Gray
+        Write-Host " policy toggles - the same surfaces Settings > Privacy & security exposes." -ForegroundColor Gray
+        Write-Host " Never touches Defender, UAC, or Windows Update - see file header.`n" -ForegroundColor Gray
+
+        $items = @(
+            @{ Text = "Set Diagnostic Data to Basic (Required diagnostic data)                       [4/10]"
+               Action = { Write-TweakResult (Set-DiagnosticDataLevel $true) } }
+            @{ Text = "Restore Diagnostic Data to Full (Windows default)"
+               Action = { Write-TweakResult (Set-DiagnosticDataLevel $false) } }
+            @{ Text = "Disable Advertising ID                                                        [3/10]"
+               Action = { Write-TweakResult (Set-AdvertisingId $true) } }
+            @{ Text = "Restore Advertising ID to Windows default (Enabled)"
+               Action = { Write-TweakResult (Set-AdvertisingId $false) } }
+            @{ Text = "Disable Activity History / Timeline publish+upload                           [3/10]"
+               Action = { Write-TweakResult (Set-ActivityHistory $true) } }
+            @{ Text = "Restore Activity History to Windows default (Enabled)"
+               Action = { Write-TweakResult (Set-ActivityHistory $false) } }
+            @{ Text = "Disable Tailored Experiences / Suggested Content                              [3/10]"
+               Action = { Write-TweakResult (Set-TailoredExperiences $true) } }
+            @{ Text = "Restore Tailored Experiences to Windows default (Enabled)"
+               Action = { Write-TweakResult (Set-TailoredExperiences $false) } }
+            @{ Text = "Disable Start Menu Web Search                                                 [2/10]"
+               Action = { Write-TweakResult (Set-StartMenuWebSearch $true) } }
+            @{ Text = "Restore Start Menu Web Search to Windows default (Enabled)"
+               Action = { Write-TweakResult (Set-StartMenuWebSearch $false) } }
+            @{ Text = "Privacy Diagnostics (current state of all items above, read-only)"
+               Action = { Show-PrivacyDiagnostics } }
+            @{ Text = "Restore ALL Privacy/Telemetry tweaks to Windows defaults"
+               Action = { if (Confirm-Action "Revert all Security/Privacy/Telemetry tweaks to Windows defaults?") { Restore-AllPrivacyTweaks } } }
+        )
+
+        Write-Host ""
+        $num = 0; $indexMap = @{}
+        foreach ($it in $items) {
+            $num++
+            $indexMap[$num] = $it
+            Write-Host (" [{0}] {1}" -f $num, $it.Text)
+        }
+        Write-Host " [0] Back to Main Menu"
+        $c = Read-Host "`nSelect"
+        if ($c -eq "0") { return }
+        if ($c -match '^\d+$' -and $indexMap.ContainsKey([int]$c)) {
+            & $indexMap[[int]$c].Action
+            Wait-ForEnter
+        } else {
+            Show-InvalidSelection
+        }
+    }
+}
+
+# ==============================================================================
 #  18. MAIN MENU
 # ==============================================================================
 Write-Log "===== ZORO session started (v$ScriptVersion) ====="
@@ -5687,6 +6716,10 @@ while ($true) {
         Write-Host " [9]  Service Tweaks            [10] GPU Extras"
         Write-Host " [11] System Repair & RAM       [13] Connection Benchmark"
         Write-Host " [14] Live Network Health Monitor    [15] Game Network Diagnostics"
+        Write-Host " [16] Process Scheduler Optimization"
+        Write-Host " [17] Advanced Memory Optimization"
+        Write-Host " [18] Advanced Storage Optimization"
+        Write-Host " [19] Security / Privacy / Telemetry Optimization"
         Write-Host "------------------------------------------------------------------------"
         Write-Host " [12] Remove Microsoft Edge (complete removal, standalone)" -ForegroundColor DarkYellow
         Write-Host "------------------------------------------------------------------------"
@@ -5711,6 +6744,10 @@ while ($true) {
             "13" { Show-ConnectionBenchmarkMenu }
             "14" { Show-NetworkHealthMenu }
             "15" { Show-GameNetworkDiagnosticsMenu }
+            "16" { Show-ProcessSchedulerMenu }
+            "17" { Show-MemoryOptimizationMenu }
+            "18" { Show-StorageOptimizationMenu }
+            "19" { Show-PrivacyOptimizationMenu }
             "U" { Invoke-UndoLastSession; Wait-ForEnter }
             "D" {
                 if ($DiscordInvite) { Start-Process $DiscordInvite } else { Write-Host "`nDiscord: $DiscordName" -ForegroundColor Cyan; Wait-ForEnter -NoBlank }
