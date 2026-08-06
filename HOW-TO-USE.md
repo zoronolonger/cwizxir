@@ -1,163 +1,217 @@
-# How to Use ZORO Tweaking Utility
+# How to Use ZORO
 
-This guide walks through launching ZORO, understanding why it needs elevation, what each main menu does, how the safety systems (Backup, Undo, Restore) work, and the order in which to approach tweaking a fresh system.
+## Launch
 
----
+Run `ZORO Tweaking Utility.ps1` in PowerShell. There's nothing to install —
+the script is self-contained.
 
-## 1. Launching the Tool
+## Administrator behavior
 
-1. Open **PowerShell** (a regular, non-elevated window is fine — see the next section).
-2. Navigate to the folder containing `ZORO Tweaking Utility.ps1`.
-3. If this is your first time running a local script, allow it for this session:
-   ```powershell
-   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-   ```
-4. Run the script:
-   ```powershell
-   .\ZORO Tweaking Utility.ps1
-   ```
-5. ZORO checks its own privilege level immediately. If it isn't already elevated, it relaunches itself with a UAC prompt (see below) — you don't need to manually right-click → "Run as administrator" first, though you can if you prefer.
+On launch, ZORO checks whether the current session is elevated
+(`WindowsPrincipal`/`WindowsBuiltInRole::Administrator`). If it is not
+running as Administrator, it prints an error and exits immediately after
+you press Enter.
 
-Once running, you land on the **Main Menu**, which lists menus **[1]** through **[15]**, plus **[U] Undo Last Session**, **[D] Discord**, **[G] GitHub**, and **[Q] Exit**.
+## Auto elevation
 
-## 2. Why Administrator Is Required
+ZORO does **not** auto-elevate itself. You must start PowerShell as
+Administrator (or right-click the script and choose "Run with PowerShell"
+from an already-elevated shell/File Explorer configuration) before running
+it. There is no relaunch/UAC-prompt logic in the script.
 
-Nearly everything ZORO does requires elevated access:
+## GPU profile prompt
 
-- Writing to `HKLM` registry hives (most tweaks live under `HKEY_LOCAL_MACHINE`, not the per-user `HKCU` hive).
-- Changing network adapter properties (RSS, power management, interrupt moderation, advanced driver properties) via `Set-NetAdapter*` cmdlets.
-- Changing Windows service startup types.
-- Creating a System Restore Point.
-- Running DISM and SFC repairs.
-- Uninstalling Microsoft Edge.
+Immediately after the admin check, ZORO asks which GPU brand you run:
 
-Because almost every menu needs this access, ZORO doesn't ask you to relaunch it yourself. On startup it checks `[Security.Principal.WindowsPrincipal]::IsInRole(Administrator)`; if that's false, it automatically calls `Start-Process powershell.exe -Verb RunAs` to relaunch itself elevated and exits the original, unprivileged instance. If you click **"No"** on the UAC prompt, elevation fails and ZORO exits cleanly with an on-screen message instead of continuing half-privileged (which would cause confusing, silent failures on nearly every tweak).
+- `[1] AMD` — show AMD-only tweaks
+- `[2] NVIDIA` — show NVIDIA-only tweaks
+- `[3] Auto-detect` — uses the GPU ZORO already detected via WMI
+- `[4] Show both / not sure` — shows every vendor's tweaks
 
-> **Note:** if you launched ZORO via `irm ... | iex` (piped directly from the internet rather than run from a saved `.ps1` file), self-elevation isn't possible — PowerShell has no file path to relaunch. In that case, open an **elevated** PowerShell window yourself first, then re-run the command.
+This choice is remembered for the rest of the session and controls which
+options appear in the **Gaming Tweaks** and **Responsiveness & GPU Tweaks**
+menus. It is asked once per run — restart the script to change it.
 
-## 3. What Each Main Menu Does
+## The banner
 
-| # | Menu | Summary |
-|---|---|---|
-| **1** | **Network Optimization** | Adapter- and protocol-level tweaks: Nagle's Algorithm, Interrupt Moderation, ECN, NIC power-saving/RSS, Delivery Optimization P2P restriction, a before/after ping test, Automatic MTU Discovery, the Modern TCP Analyzer, the Advanced NIC Optimizer, and Energy Efficient Ethernet toggle. |
-| **2** | **DNS Optimizer** | Smart DNS Benchmark (ranks 5 providers by real measured latency), quick-set Cloudflare/Google/AdGuard, DNS cache flush, live DNS config viewer, and restore-to-DHCP. |
-| **3** | **Windows Tweaks** | Debloat checklist (removes selected pre-installed apps), temp file cleanup, startup app-launch delay removal/restore, and a global Background Apps disable/restore toggle. |
-| **4** | **CPU Tweaks** | Switches the active power plan between Balanced, High Performance, and Ultimate Performance, plus a CPU/hybrid-topology diagnostics view. |
-| **5** | **Gaming Tweaks** | Disables Xbox Game Bar/background recording, Fullscreen Optimizations, mouse acceleration, and vendor-specific AMD/NVIDIA gaming settings. |
-| **6** | **Miscellaneous** | Create a System Restore Point, view the change log, view About/Credits, run the Tweak Health Check, and run the System Requirements Check. |
-| **7** | **Backup & Restore** | Create a ZORO settings backup, restore from a previous backup, or open the backup folder in Explorer. |
-| **8** | **Responsiveness & GPU Tweaks** | Multi-Plane Overlay, UI delay reduction, high-resolution timer, GPU MSI Mode, Memory Integrity (HVCI) toggle, GPU TDR delay, PCIe ASPM, Fullscreen Optimizations (global), USB Selective Suspend, Power Throttling, Dynamic Tick/platform timer, Hardware-Accelerated GPU Scheduling (HAGS), and AMD/NVIDIA-specific responsiveness settings. |
-| **9** | **Service Tweaks** | Disable low-impact or "caution" background services, restore previously disabled services, and manage AMD/NVIDIA vendor background services separately. |
-| **10** | **GPU Extras** | Clear the DirectX shader cache and, on modern GPUs, extend the TDR (Timeout Detection and Recovery) delay for sustained ray-tracing/frame-generation workloads. |
-| **11** | **System Repair & RAM** | DISM CheckHealth/ScanHealth/RestoreHealth, System File Checker (`sfc /scannow`), a combined "full repair pass," and a standby memory list clean. |
-| **12** | **Remove Microsoft Edge** | A standalone, complete removal of Microsoft Edge — process, services, scheduled tasks, files, registry entries, Appx packaging, and shortcuts. |
-| **13** | **Connection Benchmark** | A full (ping/jitter/loss + DNS + throughput + weighted score) or quick (ping/jitter/loss + DNS only) network benchmark. |
-| **14** | **Live Network Health Monitor** | An opt-in, start/stop/pause/resume live dashboard that tracks connection health over time. |
-| **15** | **Game Network Diagnostics** | Best game adapter detection, NIC driver health check, IRQ/MSI detection, Bufferbloat test, route quality analyzer, per-service gaming connectivity test, and a full diagnostics report file. |
-| **16** | **Process Scheduler Optimization** | Processor Scheduling mode (Programs vs. Background services), MMCSS Low-Latency Mode, MMCSS Network Throttling disable, a defensive "Games" MMCSS task repair, MMCSS service health repair, and read-only diagnostics. |
-| **17** | **Advanced Memory Optimization** | Memory Compression toggle, Page File "System Managed" repair, read-only Memory Diagnostics (RAM/commit charge/compression/page file/top processes), and a Windows Memory Diagnostic (`mdsched.exe`) launcher. |
-| **18** | **Advanced Storage Optimization** | TRIM enable (shown only when an SSD/NVMe is detected), NTFS Last-Access Timestamp toggle, Scheduled Drive Optimization repair, Storage Sense enable/disable, and read-only Storage Diagnostics. |
-| **19** | **Security / Privacy / Telemetry Optimization** | Diagnostic Data Level, Advertising ID, Activity History/Timeline, Tailored Experiences/Suggested Content, Start Menu Web Search — all registry-policy toggles, plus read-only Privacy Diagnostics. |
-| **U** | **Undo Last Session** | Rolls back every registry value and service-startup type ZORO has changed, in reverse order, verifying each restore. |
+Every menu screen redraws a banner showing your CPU, RAM, OS build, GPU
+(plus your selected profile), and current ping to 8.8.8.8.
 
-Every individual tweak inside these menus is described, rated, and risk-assessed in [`TWEAK_AUDIT.md`](TWEAK_AUDIT.md).
+## Main Menu
 
-## 4. Best Practices Before Applying Tweaks
+```
+[1] Network Optimization      [2] DNS Optimizer
+[3] Windows Tweaks            [4] CPU Tweaks
+[5] Gaming Tweaks             [6] Miscellaneous
+[7] Backup & Restore          [8] Responsiveness & GPU Tweaks
+[9] Service Tweaks
+[D] Discord   [G] GitHub   [Q] Exit
+```
 
-1. **Create a System Restore Point first.** Menu **[6] Miscellaneous → [1] Create a System Restore Point**. This is a Windows-level safety net independent of ZORO's own backup system — it can recover from problems ZORO's own scope doesn't cover.
-2. **Create a ZORO backup second.** Menu **[7] Backup & Restore → [1] Create a backup**. This captures the exact registry keys and DNS settings ZORO is capable of changing, in a format ZORO itself knows how to restore precisely (see §7 below).
-3. **Run the System Requirements Check.** Menu **[6] Miscellaneous → [5]**. It reports what your specific hardware/OS actually qualifies for (HAGS prerequisites, GPU driver age/signature, Windows build) before you go hunting for a menu entry that turns out to be hidden because a prerequisite isn't met.
-4. **Read the rating and the confirmation prompt for every tweak**, not just the menu label. The `[n/10]` tag is the *real* expected impact, and higher-impact or trade-off-bearing tweaks (HVCI, Winsock Reset, Dynamic Tick, service disabling) show additional warning text before you confirm.
-5. **Apply tweaks one category at a time**, then use the tool (or your own workload — game, browser, benchmark) to confirm nothing regressed, before moving to the next menu. This makes it far easier to identify which single change caused a problem, if one occurs.
-6. **Know what's reversible before you run it.** See §6 for the exact scope of Undo, and don't run irreversible actions (Debloat, Edge removal, temp cleanup) until you're confident.
+### [1] Network Optimization
+- **[1]** Disable Nagle's Algorithm — writes `TcpAckFrequency`/`TCPNoDelay`
+  to every network adapter's interface key. Confirmation required.
+- **[2]** TCP Auto-Tuning: Normal — `netsh int tcp set global
+  autotuninglevel=normal`.
+- **[3]** Enable ECN — `netsh int tcp set global ecncapability=enabled`.
+- **[4]** NIC Advanced — disables adapter power-saving and enables RSS on
+  every active physical adapter via `Set-NetAdapterPowerManagement` /
+  `Enable-NetAdapterRss`. Adapters whose driver doesn't support a setting
+  are skipped, not force-written. Confirmation required.
+- **[5]** Quick before/after ping test — 4 pings to 8.8.8.8, reports the
+  average.
+- **[6]** Restore ALL network tweaks — reverts Nagle, resets TCP
+  autotuning/ECN to their "normal"/"enabled" values, and re-enables NIC
+  power-saving. Confirmation required.
 
-## 5. How to Restore Defaults
+### [2] DNS Optimizer
+- **[1]** Benchmark providers and auto-apply the fastest — pings
+  Cloudflare (1.1.1.1), Google (8.8.8.8), Quad9 (9.9.9.9), and OpenDNS
+  (208.67.222.222), 2 pings each, then offers to apply the winner to every
+  active adapter.
+- **[2]** Quick-set Cloudflare (1.1.1.1 / 1.0.0.1)
+- **[3]** Quick-set Google (8.8.8.8 / 8.8.4.4)
+- **[4]** Flush DNS cache
+- **[5]** Restore DHCP-assigned DNS on all active adapters (undoes 1–3)
 
-Nearly every tweak menu has its own **"Restore ALL … to Windows defaults"** entry:
+### [3] Windows Tweaks
+- **[1]** Debloat — a checklist of 19 first-party bundled apps (3D
+  Builder, 3D Viewer, Mixed Reality Portal, Weather, News, Get Help,
+  Get Started, Office Hub, Solitaire Collection, People, Feedback Hub,
+  Your Phone, Zune Music/Video, Skype, To Do, Clipchamp, Teams, Power
+  Automate Desktop). Select by number, comma list, or `all`. Never removes
+  Defender, Store, or Edge.
+- **[2]** Clean Temp Files — clears `%TEMP%` and `%SystemRoot%\Temp`,
+  reports approximate MB freed.
+- **[3]** Remove startup app launch delay (`StartupDelayInMSec = 0`).
+- **[4]** Restore startup delay to Windows default (removes the override).
 
-- Menu **[1]**, option **[11]** — reverts Nagle's Algorithm, Interrupt Moderation, ECN, Auto-Tuning, NIC Advanced settings, Delivery Optimization, and MTU.
-- Menu **[2]**, option **[7]** — restores DHCP-assigned DNS, undoing any DNS provider change.
-- Menu **[3]**, options **[4]** and **[6]** — restore startup delay and Background Apps individually.
-- Menu **[5]** — "Restore ALL gaming tweaks to Windows defaults."
-- Menu **[8]** — "Restore ALL of the above to Windows defaults," covering the full Responsiveness & GPU menu.
-- Menu **[9]**, option **[3]** — "Restore previously disabled services," restoring each service to its recorded original startup type (not a guess).
-- Menu **[10]** — "Restore ALL GPU Extras tweaks to Windows defaults."
-- Menu **[16]** — "Restore ALL Process Scheduler tweaks to Windows defaults" (resets Processor Scheduling mode, MMCSS System Responsiveness, and MMCSS Network Throttling; the "Games" task and MMCSS service repairs aren't included here since both only ever restore Windows' own shipped values — there's nothing else to revert past that).
-- Menu **[17]** — "Restore ALL Memory Optimization tweaks to Windows defaults" (re-enables Memory Compression and repairs the page file back to System Managed).
-- Menu **[18]** — "Restore ALL Storage Optimization tweaks to Windows defaults" (restores TRIM if disabled, re-enables NTFS Last-Access Timestamps, repairs the Scheduled Drive Optimization task, and re-enables Storage Sense).
-- Menu **[19]** — "Restore ALL Privacy/Telemetry tweaks to Windows defaults" (clears every registry value this menu can set, returning each item to its default, unmanaged state).
+### [4] CPU Tweaks
+- **[1]** Set Power Plan: High Performance
+- **[2]** Disable CPU Core Parking (`CPMINCORES = 100` on the active
+  scheme). Confirmation required — can raise idle power draw.
+- **[3]** Restore Power Plan: Balanced (Windows default)
+- **[4]** Restore CPU Core Parking to default (`CPMINCORES = 5`)
 
-These per-menu restores are the fastest way to cleanly revert a whole category. For a broader or more surgical rollback, use **Undo Last Session** or **Backup & Restore** instead (§6–§7).
+### [5] Gaming Tweaks
+- **[1]** Enable Hardware-Accelerated GPU Scheduling (needs reboot)
+- **[2]** Disable Xbox Game Bar / background recording
+- **[3]** Disable Fullscreen Optimizations (global default)
+- **[4]** Disable Mouse Acceleration
+- **[5]** AMD-only: Disable AMD External Events Utility service — shown
+  unless your GPU profile is NVIDIA
+- **[7]** NVIDIA-only: Prefer Maximum Performance power mode — shown
+  unless your GPU profile is AMD
+- **[6]** Restore ALL gaming tweaks — reverts everything above, including
+  whichever vendor tweak applies to your profile
 
-## 6. How Undo Works
+Note the numbering here is exactly as implemented: options 5 and 7 are
+vendor-conditional and 6 is the restore-all option, so the on-screen list
+isn't strictly sequential when only one vendor section is showing.
 
-ZORO maintains a single **undo ledger** — a running record of every change it makes that is structurally reversible.
+### [6] Miscellaneous
+- **[1]** Create a System Restore Point (`Checkpoint-Computer`, type
+  `MODIFY_SETTINGS`). Not automatic — you must run this yourself before
+  tweaking if you want a restore point.
+- **[2]** View change log — last 40 lines of today's log file.
+- **[3]** About / Credits — version, author, GitHub link.
 
-- **What's tracked:** every write made through the tool's own `Set-RegDword`, `Set-RegStringVerified`, `Set-RegMultiStringVerified`, `Remove-RegValue`, or service-startup-type functions records the *prior* value, both in memory and to disk (`C:\ZORO_Suite\UndoSession.json`), **before** the change is applied. If ZORO or Windows crashes mid-tweak, the record of what to restore is already safely on disk. This covers every tweak in Process Scheduler [16], Advanced Storage [18], and Security/Privacy/Telemetry [19] — all registry-shaped — the same way it covers earlier menus. Memory Compression (menu [17]) is not registry-shaped (it's set via `Enable-MMAgent`/`Disable-MMAgent`), so it uses its own dedicated `MemoryCompression` undo-record type instead — same precedent as the `InterfaceMtu` and `DnsServers` record types used elsewhere.
-- **How to trigger it:** select **[U] Undo Last Session** from the Main Menu. The Main Menu itself shows a live count of how many changes are currently recorded and undoable.
-- **Order:** changes are rolled back in reverse order (most recent first), and each restore is verified by reading the value back — not just assumed to have succeeded.
-- **Session persistence:** the ledger isn't wiped when you close ZORO. If you close the tool (or it crashes) without undoing, reopening it later still shows the same pending records and lets you undo them then.
-- **What Undo does *not* cover** — stated plainly, because pretending otherwise would be a false safety net:
-  - Debloat / pre-installed app removal (menu 3)
-  - Microsoft Edge removal (menu 12)
-  - Temp file cleanup (menu 3)
-  - DISM / SFC repairs (menu 11)
+### [7] Backup & Restore
+- **[1]** Create a backup — exports these registry paths (where present)
+  to a timestamped folder under `ZORO_Suite\Backups`:
+  `Tcpip\Parameters\Interfaces`, `GameConfigStore`, `GameDVR`,
+  `GameDVR` policy, `Control Panel\Mouse`, `Explorer\Serialize`,
+  `GraphicsDrivers`, `Control Panel\Desktop`, `Dwm`,
+  `Multimedia\SystemProfile`, `Session Manager\kernel`. Also records the
+  active power scheme.
+- **[2]** Restore settings from a previous backup — pick a timestamped
+  backup from a list, confirm, and every `.reg` file in it is re-imported.
+- **[3]** Open the backups folder in Explorer.
 
-  None of these are reversible by re-writing a saved registry value, so they're intentionally excluded from the undo ledger rather than given a fake "undo" that wouldn't actually restore anything. If you need to reverse one of these, see [`UNINSTALL.md`](UNINSTALL.md) and [`TWEAK_AUDIT.md`](TWEAK_AUDIT.md) for what's realistically achievable for each.
+### [8] Responsiveness & GPU Tweaks
+This menu is built dynamically each time it opens, so its numbering shifts
+depending on your GPU profile. The vendor-neutral items always shown:
 
-## 7. How Backup Works
+1. Disable Multi-Plane Overlay
+2. Reduce menu/mouse-hover delay
+3. Apply MMCSS "Games" profile + `SystemResponsiveness = 0`
+4. Enable high-resolution system timer
+5. Enable hover-to-focus window tracking
+6. Extend GPU driver TDR delay to 8 seconds
+7. Disable PCIe ASPM power saving (asks whether to also disable it in BIOS)
+8. Toggle Hardware-Accelerated GPU Scheduling (shows current state)
+9. Disable Fullscreen Optimizations for all games
 
-Menu **[7] Backup & Restore → [1] Create a backup** creates a timestamped folder under `C:\ZORO_Suite\Backups\yyyy-MM-dd_HH-mm-ss\` containing:
+If your GPU profile is not NVIDIA, AMD-only items are appended: Shader
+Cache (Always On / Off), Tessellation override (Max 16x / Application
+controlled), Disable ULPS (confirmation required — raises idle GPU power),
+and Set AMD FUEL Service to Manual.
 
-- A `.reg` export for each registry path ZORO is capable of modifying (only the keys the tool actually touches — not your whole registry).
-- `DnsServers.json` — a per-adapter snapshot of DNS server assignments, since DNS is configured per-adapter rather than through a static registry path.
-- `ActivePowerScheme.txt` — the active power plan at the time of backup.
+If your GPU profile is not AMD, NVIDIA-only items are appended: Power Mode
+(Prefer Maximum Performance), Set NVIDIA Telemetry service to Manual, and
+Set NVIDIA Container services (`NvContainerLocalSystem` /
+`NvContainerNetworkService`) to Manual.
 
-This is complementary to, not a substitute for, a Windows System Restore Point (§4, step 1): ZORO's backup only covers what ZORO itself can change, while a Restore Point covers the whole system.
+The last item is always **Restore ALL of the above to Windows defaults**,
+which also reverts whichever vendor section applied to your session.
 
-## 8. How Restore Works
+### [9] Service Tweaks
+- **[1]** Disable low-impact services — a checklist of 19 services
+  considered safe for most PCs (DiagTrack telemetry, Maps Broker,
+  Geolocation, Parental Controls, Fax, Retail Demo Mode, Offline Files,
+  Payments/NFC, Link-Layer Topology Discovery, App-V, Assigned Access,
+  Work Folders, UE-V, Phone Link messaging, Shared PC Account Manager,
+  Program Compatibility Assistant, Windows Error Reporting, Net.Tcp Port
+  Sharing, Quality Windows A/V Experience).
+- **[2]** Disable caution services — a second checklist with an extra
+  warning, covering Bluetooth, Windows Hello biometrics, Print Spooler,
+  Windows Search, Smart Card, touch/handwriting input, Phone Link, mail
+  sync, and several Xbox Live services.
+- **[3]** Restore previously disabled services — restores each service to
+  the exact startup type it had before ZORO touched it (from
+  `ServiceState.json`), starting it back up if it was originally
+  Automatic.
 
-Menu **[7] Backup & Restore → [2] Restore settings from a previous backup**:
+Every disable in this menu is preceded by an automatic `.reg` export of
+that service's key and a record of its original startup type.
 
-1. Lists all backups found under `C:\ZORO_Suite\Backups\`, newest first.
-2. You select one by number.
-3. You're asked to confirm — the prompt explicitly states this "overwrites current values in those specific keys only," not a full-system rollback.
-4. Each `.reg` file is re-imported, with success/failure shown per file.
-5. The DNS snapshot is restored per adapter and **verified** by reading the configuration back afterward, not just trusted based on the command's exit code. Adapters that no longer exist (e.g., you removed a USB NIC since the backup) are skipped safely rather than causing an error.
-6. You're reminded that a sign-out or reboot may be needed for every restored value to fully take effect.
+## Backup workflow
 
-## 9. How to Use Diagnostics
+1. `[7] Backup & Restore → [1] Create a backup` before making changes.
+2. Apply whatever tweaks you want.
+3. If something feels wrong, `[7] Backup & Restore → [2] Restore settings
+   from a previous backup` and pick the backup you made.
 
-ZORO includes several read-only diagnostic tools that don't change any settings on their own:
+## Restore workflow
 
-- **Menu [6] → [4] Tweak Health Check** — reports what's actually applied right now across the tweaks ZORO tracks, independent of what you remember selecting.
-- **Menu [6] → [5] System Requirements Check** — reports what your specific hardware/OS qualifies for (HAGS prerequisites, GPU driver age and WHQL signature status, Windows build number).
-- **Menu [4] → [4] CPU / hybrid-topology diagnostics** — reports CPU core/thread topology, useful on hybrid (P-core/E-core) CPUs.
-- **Menu [16] → Process Scheduler Diagnostics** — reports Processor Scheduling mode, MMCSS System Responsiveness, MMCSS Network Throttling state, the "Games" task profile's health, and MMCSS service status.
-- **Menu [17] → Memory Diagnostics** — reports total/free RAM, commit charge, Memory Compression state, page file size/management mode, and the top 5 processes by working set. Links out to Service Tweaks [9] for SysMain/Superfetch guidance rather than duplicating it.
-- **Menu [18] → Storage Diagnostics** — reports detected disk type, TRIM state, NTFS Last-Access Timestamp state, Scheduled Drive Optimization state, and Storage Sense state.
-- **Menu [19] → Privacy Diagnostics** — reports Diagnostic Data Level, Advertising ID, Activity History, Tailored Experiences, and Start Menu Web Search state. Links out to Service Tweaks [9] for the DiagTrack/WerSvc service toggles rather than duplicating them.
-- **Menu [13] Connection Benchmark** — full or quick network quality tests (ping/jitter/loss, DNS latency, throughput, and a weighted overall score).
-- **Menu [14] Live Network Health Monitor** — an opt-in, continuously-refreshing dashboard; start it, and pause/resume/stop/reset it independently without restarting ZORO.
-- **Menu [15] Game Network Diagnostics** — includes the Bufferbloat Test (real idle-vs-loaded latency), Route Quality Analyzer (per-hop trace analysis), Gaming Connectivity Test (against specific game services or a custom host), NIC Driver Health Check, IRQ/MSI Capability Detection, and a one-shot **Advanced Diagnostics Report** that writes everything above (plus DNS/Gateway/IPv4/IPv6/public IP) to a timestamped `.txt` file — useful to attach when asking for help or filing an issue.
+- For most individual tweaks: use the matching "Restore" option in the
+  same menu.
+- For registry-key-level rollback: `[7] Backup & Restore → [2]`.
+- For services disabled via `[9]`: `[9] → [3] Restore previously disabled
+  services`.
 
-## 10. Recommended Order for Applying Tweaks
+## Recommended order
 
-For a first session on a new system, the following order minimizes risk and makes any regression easy to trace back to a specific change:
+1. Launch as Administrator, pick your GPU profile.
+2. `[6] Miscellaneous → [1]` Create a System Restore Point.
+3. `[7] Backup & Restore → [1]` Create a backup.
+4. Apply tweaks menu by menu.
+5. Reboot if you touched HAGS, TDR delay, or anything else flagged as
+   needing a restart.
 
-1. **[6] → [5] System Requirements Check** — see what your system actually qualifies for.
-2. **[6] → [1] Create a System Restore Point.**
-3. **[7] → [1] Create a ZORO backup.**
-4. **[13] Connection Benchmark (Full)** — establish a network baseline before touching network settings.
-5. **[2] DNS Optimizer → Smart DNS Benchmark** — apply a DNS change only if it measurably helps your connection.
-6. **[1] Network Optimization** — apply Safe/Recommended items first (see `TWEAK_AUDIT.md`); leave Experimental/Situational items for later, deliberate sessions.
-7. **[4] CPU Tweaks** — pick a power plan appropriate to your device (desktop vs. laptop-on-battery matters here).
-8. **[3] Windows Tweaks** and **[9] Service Tweaks** — debloat and service changes, since these are lower-risk to defer and easier to evaluate once your network baseline is already good.
-9. **[5] Gaming Tweaks** and **[8] Responsiveness & GPU Tweaks** — apply Safe/Recommended entries; treat HVCI and other security-trade-off tweaks as their own deliberate, separate decision.
-10. **[16] Process Scheduler Optimization** and **[17] Advanced Memory Optimization** — apply after Gaming/Responsiveness, since their benefit is most noticeable once the more impactful network/GPU tweaks are already in place; run the "Games" task and MMCSS service repairs here even on a first pass, since they're purely defensive (undoing another tool's prior changes) rather than something that can regress anything.
-11. **[18] Advanced Storage Optimization** — confirm TRIM is enabled if you're on an SSD/NVMe (menu only shows it when one is detected) and that Scheduled Drive Optimization is healthy; treat Storage Sense and NTFS Last-Access Timestamps as optional.
-12. **[19] Security / Privacy / Telemetry Optimization** — a personal-preference pass, not a performance one; apply only the specific toggles you actually want (see `TWEAK_AUDIT.md` for what each one controls).
-13. **[10] GPU Extras** and **[11] System Repair & RAM** — as needed, not as a default pass.
-14. Re-run **[13] Connection Benchmark** and **[6] → [4] Tweak Health Check** to confirm the end state matches what you intended.
+## Best practices
 
-If anything regresses at any point, use **[U] Undo Last Session** first (fastest, most surgical), then the relevant menu's "Restore ALL to Windows defaults" entry, then **[7] → [2] Restore from backup**, and — for anything outside ZORO's own scope — the System Restore Point you created in step 2.
+- Read each confirmation prompt — several tweaks explicitly warn about
+  trade-offs (idle power draw, fan noise, driver crash-recovery timing).
+- Don't disable a "Caution" service unless you're sure you don't use the
+  feature it backs.
+- Re-run the GPU profile prompt (restart the script) if you change your
+  graphics card.
+
+## Warnings
+
+- ZORO will not run without Administrator rights.
+- Disabling Print Spooler, Windows Search, Bluetooth, or Windows Hello
+  services will break the corresponding Windows feature until restored.
+- NIC power-saving/RSS changes are skipped (not forced) on adapters whose
+  driver doesn't expose the setting.
