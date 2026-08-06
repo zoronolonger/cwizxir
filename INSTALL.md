@@ -18,7 +18,7 @@ See [`SUPPORTED.md`](SUPPORTED.md) for the full compatibility matrix, including 
 - **PowerShell 5.1 or later.** This is the version that ships built into Windows 10 and Windows 11 by default — most users do not need to install anything extra.
 - ZORO detects your PowerShell major version at launch (`$PSVersionTable.PSVersion.Major`) and adjusts certain diagnostic behavior accordingly (some `Test-Connection` output differs between PowerShell 5.1 and PowerShell 7+).
 - PowerShell 7+ (PowerShell Core) is not required, but is compatible if you have it installed and choose to run the script through it.
-  #Quick use:
+## Quick use:
   just run: irm https://raw.githubusercontent.com/zoronolonger/cwizxir/main/install.ps1 | iex
   or :iex "& { $(iwr -useb 'https://raw.githubusercontent.com/zoronolonger/cwizxir/main/install.ps1') }"
 ## Installation Steps
