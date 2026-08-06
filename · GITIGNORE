@@ -1,0 +1,50 @@
+# ==============================================================================
+#  ZORO Tweaking Utility - .gitignore
+# ==============================================================================
+
+# ZORO's own runtime data - never commit real user backups, logs, or undo
+# ledgers. These contain machine-specific registry exports, adapter names,
+# and settings history and have no place in source control.
+ZORO_Suite/
+**/ZORO_Suite/
+Logs/
+Backups/
+ServiceState.json
+UndoSession.json
+*.log
+
+# Generated diagnostics reports (Game Network Diagnostics -> Advanced
+# Diagnostics Report writes timestamped .txt files with adapter/IP details)
+*DiagnosticsReport*.txt
+NetworkDiagnostics_*.txt
+
+# Registry export artifacts (in case a manual reg export lands in the repo)
+*.reg
+
+# PowerShell / editor artifacts
+*.ps1xml.bak
+*.psd1.bak
+*~
+*.tmp
+*.bak
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Windows OS artifacts
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Local test/dev scratch files
+/scratch/
+/test-output/
+local-notes.md
+
+# Environment / secrets (Discord invite links, tokens, etc. if externalized
+# in the future - currently $DiscordInvite lives inline in the script, but
+# if it's ever moved to a config file, that file should never be committed)
+.env
+*.secrets.json
+config.local.*
