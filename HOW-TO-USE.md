@@ -17,6 +17,7 @@ This guide walks through running ZORO (v1.2.0) and using each menu. For a full f
 1. Right-click `ZORO Tweaking Utility.ps1` → **Run with PowerShell**, or run:
    ```powershell
    powershell -ExecutionPolicy Bypass -File "ZORO Tweaking Utility.ps1"
+   or powershell -ExecutionPolicy Bypass -File "C:\Users\...\ZORO Tweaking Utility.ps1"
    ```
 2. If PowerShell isn't elevated, ZORO prints `[ERROR] Please run ZORO as Administrator!` and exits — relaunch as Administrator.
 3. On success, ZORO creates its workspace automatically:
