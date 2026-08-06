@@ -1,0 +1,77 @@
+# Supported Configurations
+
+## Operating Systems
+
+| OS | Status | Notes |
+|---|---|---|
+| Windows 11, version 24H2 | ✅ Fully supported | Full feature set available, including the latest HAGS/WDDM-gated tweaks |
+| Windows 11, version 23H2 | ✅ Fully supported | Baseline supported Windows 11 release |
+| Windows 11, versions older than 23H2 | ⚠️ Not tested | Update to 23H2+ before reporting issues |
+| Windows 10, version 22H2 | ✅ Fully supported | Baseline supported Windows 10 release |
+| Windows 10, versions older than 22H2 | ⚠️ Not tested | Update via Windows Update before reporting issues |
+| Windows 8 / 8.1 | ❌ Not supported | Out of scope — not detected for or handled anywhere in the script |
+| Windows 7 | ❌ Not supported | Out of scope — not detected for or handled anywhere in the script |
+| Windows Server (any edition/version) | ❌ Not supported | Out of scope — server roles and services are not accounted for |
+
+## PowerShell
+
+| Version | Status |
+|---|---|
+| PowerShell 5.1 (built into Windows 10/11) | ✅ Fully supported — this is the primary target |
+| PowerShell 7.x (PowerShell Core) | ✅ Compatible — some diagnostic output (e.g., `Test-Connection` properties) is adjusted automatically based on detected major version |
+| PowerShell 4.0 or earlier | ❌ Not supported |
+
+## Administrator Requirement
+
+Administrator rights are **required for all versions** — see `INSTALL.md` and `HOW_TO_USE.md` for how self-elevation works.
+
+## CPU
+
+- **Intel and AMD** desktop and laptop CPUs are both supported.
+- Hybrid (P-core/E-core) Intel topologies are specifically detected and reported in the CPU/hybrid-topology diagnostics (menu **[4] → [4]**).
+- The Memory Integrity (HVCI) FPS trade-off documented in `TWEAK_AUDIT.md` is concentrated on specific Intel 12th/13th/14th-generation CPUs — the tweak itself is available on any supported CPU, but the expected benefit varies by generation and is explained in the tool's own warning text.
+
+## GPU
+
+| Vendor/Tier | Status |
+|---|---|
+| NVIDIA RTX 3000–5000 series | ✅ Fully audited (v3.5.0 GPU-section audit) |
+| AMD RX 6000–9000 series | ✅ Fully audited (v3.5.0 GPU-section audit) |
+| Older NVIDIA/AMD GPUs | ⚠️ General tweaks apply; GPU-tier-specific features (e.g., "modern" tier TDR extension in GPU Extras) may not appear |
+| Integrated/iGPU-only systems | ⚠️ Network, CPU, and Windows tweaks fully apply; GPU-vendor-specific menus are conditionally hidden based on detected vendor |
+| Systems with both AMD and NVIDIA GPUs | ✅ Supported — menu **[6] Miscellaneous** GPU profile selection lets you choose AMD-only, NVIDIA-only, or both shown |
+
+Some GPU-dependent tweaks are **hidden outright rather than shown and refused** when prerequisites aren't met:
+
+- **HAGS (Hardware-Accelerated GPU Scheduling)** requires Windows 10 build 19041+ (2004) **and** a WDDM 2.7+ driver.
+- **GPU Extras' TDR extension for RT/frame-gen** is only shown for GPUs detected as "modern" tier.
+
+## Network Adapters
+
+- ZORO works with any adapter exposed through the standard `Get-NetAdapter`/`Set-NetAdapter*` cmdlets — Ethernet, Wi-Fi, and most third-party NIC drivers.
+- Advanced NIC features (RSS, RSC, LSO v2, Checksum Offload, Interrupt Moderation, EEE, advanced driver properties) are **detected per-adapter before being offered** — unsupported features on your specific adapter/driver are skipped safely rather than causing an error, and this is reported to you rather than silently ignored.
+- Virtual adapters (VPN, Hyper-V, VMware, VirtualBox, WSL) are specifically detected and classified by the Game Network Diagnostics menu's Best Game Adapter Detection feature, so they aren't mistakenly treated as your primary gaming connection.
+
+## Storage
+
+- HDD, SATA SSD, and NVMe SSD are all specifically detected (`Get-SystemStorageProfile`, using `MediaType`) and used to give **context-aware guidance** — most notably for the SysMain/Superfetch service recommendation in menu **[9]**, which differs based on your actual detected disk type and installed RAM rather than giving one static recommendation to everyone.
+
+## Laptop vs. Desktop Detection
+
+ZORO detects laptops via battery presence and chassis-type signals (`Test-IsLaptop`) and uses this to:
+
+- Gate **Ultimate Performance** behind an explicit battery-impact confirmation.
+- Show battery-impact context on power-plan, PCIe ASPM, and vendor power-mode tweaks throughout `TWEAK_AUDIT.md`.
+
+## What's Explicitly Out of Scope
+
+ZORO's scope is intentionally narrow. It does **not** provide tweaks for, and will not modify:
+
+- Windows Defender / any antivirus configuration
+- User Account Control (UAC) settings
+- Windows Update configuration or deferral policies
+- BitLocker or other disk encryption
+- Group Policy or domain-managed settings (and in fact, Group Policy restrictions can block some ZORO tweaks — this is expected and reported via the `AccessDenied` error category, not bypassed)
+- Any setting unrelated to network/DNS/power/gaming performance or first-party bundled app removal
+
+The single exception, clearly flagged every time it's used, is the **Memory Integrity (HVCI)** toggle in menu **[8]**, which is a genuine security-relevant setting included specifically because of its measurable, hardware-dependent FPS trade-off — always shown with an explicit warning before you can apply it.
