@@ -54,6 +54,10 @@ Because almost every menu needs this access, ZORO doesn't ask you to relaunch it
 | **13** | **Connection Benchmark** | A full (ping/jitter/loss + DNS + throughput + weighted score) or quick (ping/jitter/loss + DNS only) network benchmark. |
 | **14** | **Live Network Health Monitor** | An opt-in, start/stop/pause/resume live dashboard that tracks connection health over time. |
 | **15** | **Game Network Diagnostics** | Best game adapter detection, NIC driver health check, IRQ/MSI detection, Bufferbloat test, route quality analyzer, per-service gaming connectivity test, and a full diagnostics report file. |
+| **16** | **Process Scheduler Optimization** | Processor Scheduling mode (Programs vs. Background services), MMCSS Low-Latency Mode, MMCSS Network Throttling disable, a defensive "Games" MMCSS task repair, MMCSS service health repair, and read-only diagnostics. |
+| **17** | **Advanced Memory Optimization** | Memory Compression toggle, Page File "System Managed" repair, read-only Memory Diagnostics (RAM/commit charge/compression/page file/top processes), and a Windows Memory Diagnostic (`mdsched.exe`) launcher. |
+| **18** | **Advanced Storage Optimization** | TRIM enable (shown only when an SSD/NVMe is detected), NTFS Last-Access Timestamp toggle, Scheduled Drive Optimization repair, Storage Sense enable/disable, and read-only Storage Diagnostics. |
+| **19** | **Security / Privacy / Telemetry Optimization** | Diagnostic Data Level, Advertising ID, Activity History/Timeline, Tailored Experiences/Suggested Content, Start Menu Web Search — all registry-policy toggles, plus read-only Privacy Diagnostics. |
 | **U** | **Undo Last Session** | Rolls back every registry value and service-startup type ZORO has changed, in reverse order, verifying each restore. |
 
 Every individual tweak inside these menus is described, rated, and risk-assessed in [`TWEAK_AUDIT.md`](TWEAK_AUDIT.md).
@@ -78,6 +82,10 @@ Nearly every tweak menu has its own **"Restore ALL … to Windows defaults"** en
 - Menu **[8]** — "Restore ALL of the above to Windows defaults," covering the full Responsiveness & GPU menu.
 - Menu **[9]**, option **[3]** — "Restore previously disabled services," restoring each service to its recorded original startup type (not a guess).
 - Menu **[10]** — "Restore ALL GPU Extras tweaks to Windows defaults."
+- Menu **[16]** — "Restore ALL Process Scheduler tweaks to Windows defaults" (resets Processor Scheduling mode, MMCSS System Responsiveness, and MMCSS Network Throttling; the "Games" task and MMCSS service repairs aren't included here since both only ever restore Windows' own shipped values — there's nothing else to revert past that).
+- Menu **[17]** — "Restore ALL Memory Optimization tweaks to Windows defaults" (re-enables Memory Compression and repairs the page file back to System Managed).
+- Menu **[18]** — "Restore ALL Storage Optimization tweaks to Windows defaults" (restores TRIM if disabled, re-enables NTFS Last-Access Timestamps, repairs the Scheduled Drive Optimization task, and re-enables Storage Sense).
+- Menu **[19]** — "Restore ALL Privacy/Telemetry tweaks to Windows defaults" (clears every registry value this menu can set, returning each item to its default, unmanaged state).
 
 These per-menu restores are the fastest way to cleanly revert a whole category. For a broader or more surgical rollback, use **Undo Last Session** or **Backup & Restore** instead (§6–§7).
 
@@ -85,7 +93,7 @@ These per-menu restores are the fastest way to cleanly revert a whole category. 
 
 ZORO maintains a single **undo ledger** — a running record of every change it makes that is structurally reversible.
 
-- **What's tracked:** every write made through the tool's own `Set-RegDword`, `Remove-RegValue`, or service-startup-type functions records the *prior* value, both in memory and to disk (`C:\ZORO_Suite\UndoSession.json`), **before** the change is applied. If ZORO or Windows crashes mid-tweak, the record of what to restore is already safely on disk.
+- **What's tracked:** every write made through the tool's own `Set-RegDword`, `Set-RegStringVerified`, `Set-RegMultiStringVerified`, `Remove-RegValue`, or service-startup-type functions records the *prior* value, both in memory and to disk (`C:\ZORO_Suite\UndoSession.json`), **before** the change is applied. If ZORO or Windows crashes mid-tweak, the record of what to restore is already safely on disk. This covers every tweak in Process Scheduler [16], Advanced Storage [18], and Security/Privacy/Telemetry [19] — all registry-shaped — the same way it covers earlier menus. Memory Compression (menu [17]) is not registry-shaped (it's set via `Enable-MMAgent`/`Disable-MMAgent`), so it uses its own dedicated `MemoryCompression` undo-record type instead — same precedent as the `InterfaceMtu` and `DnsServers` record types used elsewhere.
 - **How to trigger it:** select **[U] Undo Last Session** from the Main Menu. The Main Menu itself shows a live count of how many changes are currently recorded and undoable.
 - **Order:** changes are rolled back in reverse order (most recent first), and each restore is verified by reading the value back — not just assumed to have succeeded.
 - **Session persistence:** the ledger isn't wiped when you close ZORO. If you close the tool (or it crashes) without undoing, reopening it later still shows the same pending records and lets you undo them then.
@@ -125,6 +133,10 @@ ZORO includes several read-only diagnostic tools that don't change any settings 
 - **Menu [6] → [4] Tweak Health Check** — reports what's actually applied right now across the tweaks ZORO tracks, independent of what you remember selecting.
 - **Menu [6] → [5] System Requirements Check** — reports what your specific hardware/OS qualifies for (HAGS prerequisites, GPU driver age and WHQL signature status, Windows build number).
 - **Menu [4] → [4] CPU / hybrid-topology diagnostics** — reports CPU core/thread topology, useful on hybrid (P-core/E-core) CPUs.
+- **Menu [16] → Process Scheduler Diagnostics** — reports Processor Scheduling mode, MMCSS System Responsiveness, MMCSS Network Throttling state, the "Games" task profile's health, and MMCSS service status.
+- **Menu [17] → Memory Diagnostics** — reports total/free RAM, commit charge, Memory Compression state, page file size/management mode, and the top 5 processes by working set. Links out to Service Tweaks [9] for SysMain/Superfetch guidance rather than duplicating it.
+- **Menu [18] → Storage Diagnostics** — reports detected disk type, TRIM state, NTFS Last-Access Timestamp state, Scheduled Drive Optimization state, and Storage Sense state.
+- **Menu [19] → Privacy Diagnostics** — reports Diagnostic Data Level, Advertising ID, Activity History, Tailored Experiences, and Start Menu Web Search state. Links out to Service Tweaks [9] for the DiagTrack/WerSvc service toggles rather than duplicating them.
 - **Menu [13] Connection Benchmark** — full or quick network quality tests (ping/jitter/loss, DNS latency, throughput, and a weighted overall score).
 - **Menu [14] Live Network Health Monitor** — an opt-in, continuously-refreshing dashboard; start it, and pause/resume/stop/reset it independently without restarting ZORO.
 - **Menu [15] Game Network Diagnostics** — includes the Bufferbloat Test (real idle-vs-loaded latency), Route Quality Analyzer (per-hop trace analysis), Gaming Connectivity Test (against specific game services or a custom host), NIC Driver Health Check, IRQ/MSI Capability Detection, and a one-shot **Advanced Diagnostics Report** that writes everything above (plus DNS/Gateway/IPv4/IPv6/public IP) to a timestamped `.txt` file — useful to attach when asking for help or filing an issue.
@@ -142,7 +154,10 @@ For a first session on a new system, the following order minimizes risk and make
 7. **[4] CPU Tweaks** — pick a power plan appropriate to your device (desktop vs. laptop-on-battery matters here).
 8. **[3] Windows Tweaks** and **[9] Service Tweaks** — debloat and service changes, since these are lower-risk to defer and easier to evaluate once your network baseline is already good.
 9. **[5] Gaming Tweaks** and **[8] Responsiveness & GPU Tweaks** — apply Safe/Recommended entries; treat HVCI and other security-trade-off tweaks as their own deliberate, separate decision.
-10. **[10] GPU Extras** and **[11] System Repair & RAM** — as needed, not as a default pass.
-11. Re-run **[13] Connection Benchmark** and **[6] → [4] Tweak Health Check** to confirm the end state matches what you intended.
+10. **[16] Process Scheduler Optimization** and **[17] Advanced Memory Optimization** — apply after Gaming/Responsiveness, since their benefit is most noticeable once the more impactful network/GPU tweaks are already in place; run the "Games" task and MMCSS service repairs here even on a first pass, since they're purely defensive (undoing another tool's prior changes) rather than something that can regress anything.
+11. **[18] Advanced Storage Optimization** — confirm TRIM is enabled if you're on an SSD/NVMe (menu only shows it when one is detected) and that Scheduled Drive Optimization is healthy; treat Storage Sense and NTFS Last-Access Timestamps as optional.
+12. **[19] Security / Privacy / Telemetry Optimization** — a personal-preference pass, not a performance one; apply only the specific toggles you actually want (see `TWEAK_AUDIT.md` for what each one controls).
+13. **[10] GPU Extras** and **[11] System Repair & RAM** — as needed, not as a default pass.
+14. Re-run **[13] Connection Benchmark** and **[6] → [4] Tweak Health Check** to confirm the end state matches what you intended.
 
 If anything regresses at any point, use **[U] Undo Last Session** first (fastest, most surgical), then the relevant menu's "Restore ALL to Windows defaults" entry, then **[7] → [2] Restore from backup**, and — for anything outside ZORO's own scope — the System Restore Point you created in step 2.
